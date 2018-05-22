@@ -1,5 +1,5 @@
 import numpy as np
-from envs.valkyrie.filter import FilterClass
+from valkyrie.envs.filter import FilterClass
 
 
 class calCOP():

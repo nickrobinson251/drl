@@ -1,5 +1,5 @@
 import numpy as np
-from envs.valkyrie.filter import FilterClass, KalmanFilter
+from valkyrie.envs.filter import FilterClass, KalmanFilter
 
 
 class PDController:

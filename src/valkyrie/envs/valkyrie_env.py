@@ -1,5 +1,3 @@
-__package__ = "envs"
-
 import inspect
 import gym
 from gym import spaces
@@ -9,15 +7,15 @@ import numpy as np
 import os
 import pybullet as p
 
-from envs.valkyrie.filter import FilterClass
-from envs.valkyrie.pd_controller import PDController
-from envs.valkyrie.sensor_signal_process import calCOP
+from valkyrie.envs.filter import FilterClass
+from valkyrie.envs.pd_controller import PDController
+from valkyrie.envs.sensor_signal_process import calCOP
 
 
-currentdir = os.path.dirname(os.path.abspath(
+CURRENT_DIR = os.path.dirname(os.path.abspath(
         inspect.getfile(inspect.currentframe())))
-parentdir = os.path.dirname(os.path.dirname(currentdir))
-os.sys.path.insert(0, parentdir)
+PARENT_DIR = os.path.dirname(os.path.dirname(CURRENT_DIR))
+os.sys.path.insert(0, PARENT_DIR)
 
 Kp_default = dict([
     ("torsoYaw", 4500),
