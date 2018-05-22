@@ -1,5 +1,5 @@
 import numpy as np
-from valkyrie_gym_env.filter import FilterClass, EMAFilter, KalmanFilter
+from envs.valkyrie.filter import FilterClass, EMAFilter, KalmanFilter
 
 class PDController:
     def __init__(self, gains = [0,0], u_max = 0, v_max = 0, name = None, is_filter = [False, False, False], T = None, cutoff = None, N = None):
@@ -81,7 +81,7 @@ class PDController:
         u = np.clip(u, -self.u_max, self.u_max)#clipping torque
         self.u = u
         return u
-    
+
     def updateMeasurements(self, measured_position, measured_velocity):
         if self.is_filter[0]:
             past_position = self.filtered_position

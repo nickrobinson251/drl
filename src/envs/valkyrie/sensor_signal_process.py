@@ -1,6 +1,6 @@
 import numpy as np
 import sys, math
-from valkyrie_gym_env.filter import FilterClass
+from envs.valkyrie.filter import FilterClass
 
 class calCOP():
     def __init__(self, force_cuttoff_freq, pos_cutoff_freq, dt, order):

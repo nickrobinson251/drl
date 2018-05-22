@@ -1,1 +1,1 @@
-from envs.valkyrie import ValkyrieEnv
+from envs.valkyrie.valkyrie_env import ValkyrieEnv

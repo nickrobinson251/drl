@@ -3,3 +3,4 @@
 .ropeproject
 __pycache__
 *.swp
+*.egg-info
