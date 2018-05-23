@@ -1,4 +1,3 @@
-import inspect
 import gym
 from gym import spaces
 from gym.utils import seeding
@@ -12,12 +11,9 @@ from valkyrie.envs.pd_controller import PDController
 from valkyrie.envs.sensor_signal_process import calCOP
 
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(
-        inspect.getfile(inspect.currentframe())))
-PARENT_DIR = os.path.dirname(os.path.dirname(CURRENT_DIR))
-os.sys.path.insert(0, PARENT_DIR)
+CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
 
-Kp_default = dict([
+KP_DEFAULTS = dict([
     ("torsoYaw", 4500),
     ("torsoPitch", 4500),
     ("torsoRoll", 4500),
@@ -43,7 +39,7 @@ Kp_default = dict([
     ("leftElbowPitch", 200),
 ])
 
-Kd_default = dict([
+KD_DEFAULTS = dict([
     ("torsoYaw", 30),
     ("torsoPitch", 30),
     ("torsoRoll", 30),
@@ -82,9 +78,9 @@ class ValkyrieEnv(gym.Env):
                  isEnableSelfCollision=True,
                  renders=True,
                  PD_freq=500.0,
-                 Physics_freq=1000.0,
-                 Kp=Kp_default,
-                 Kd=Kd_default,
+                 physics_freq=1000.0,
+                 Kp=KP_DEFAULTS,
+                 Kd=KD_DEFAULTS,
                  bullet_default_PD=True,
                  logFileName=None,
                  controlled_joints_list=None,
@@ -99,7 +95,7 @@ class ValkyrieEnv(gym.Env):
         self._envStepCounter = 0
         self._renders = renders
         if logFileName is None:
-            self._logFileName = os.path.dirname(os.path.realpath(__file__))
+            self._logFileName = CURRENT_DIR
         else:
             self._logFileName = logFileName
 
@@ -112,10 +108,12 @@ class ValkyrieEnv(gym.Env):
             self.controlled_joints = ["torsoPitch",
                                       "rightHipPitch",
                                       "rightKneePitch",
-                                      "rightAnklePitch", "rightAnkleRoll",
+                                      "rightAnklePitch",
+                                      "rightAnkleRoll",
                                       "leftHipPitch",
                                       "leftKneePitch",
-                                      "leftAnklePitch", "leftAnkleRoll", ]
+                                      "leftAnklePitch",
+                                      "leftAnkleRoll"]
         else:
             self.controlled_joints = controlled_joints_list
         # TODO add control for roll joints
@@ -126,9 +124,9 @@ class ValkyrieEnv(gym.Env):
         self.nu = len(self.controlled_joints)
         self.r = -1
         self.PD_freq = PD_freq
-        self.Physics_freq = Physics_freq
-        self._actionRepeat = int(Physics_freq/PD_freq)
-        self._dt_physics = (1. / self.Physics_freq)
+        self.physics_freq = physics_freq
+        self._actionRepeat = int(physics_freq/PD_freq)
+        self._dt_physics = (1. / self.physics_freq)
         self._dt_PD = (1. / self.PD_freq)
         self._dt = self._dt_physics  # PD control loop timestep
         self._dt_filter = self._dt_PD  # filter time step
@@ -324,8 +322,8 @@ class ValkyrieEnv(gym.Env):
 
     def _reset(
             self,
-            Kp=Kp_default,
-            Kd=Kd_default,
+            Kp=KP_DEFAULTS,
+            Kd=KD_DEFAULTS,
             base_pos_nom=None,
             base_orn_nom=None,
             fixed_base=False):
@@ -767,7 +765,7 @@ class ValkyrieEnv(gym.Env):
         p.setGravity(0, 0, -self.g)  # TODO set gravity
         p.setTimeStep(self._dt)
 
-        self.dir_path = os.path.dirname(os.path.realpath(__file__))
+        self.dir_path = CURRENT_DIR
 
         p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
         plane_urdf = self.dir_path + "/assets/plane/plane.urdf"
