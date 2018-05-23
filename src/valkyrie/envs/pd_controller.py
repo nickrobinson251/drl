@@ -100,20 +100,24 @@ class PDController:
             self.adjusted_position = self.filtered_position + (
                 self.filtered_position - past_position)
             self.measured_position = measured_position
-            self.kalman_filtered_position = self.kalman_position_filter.input_latest_noisy_measurement(
-                measured_position)
-            self.kalman_filtered_velocity = self.kalman_velocity_filter.input_latest_noisy_measurement(
-                measured_velocity)
+            self.kalman_filtered_position = (
+                self.kalman_position_filter.input_latest_noisy_measurement(
+                    measured_position))
+            self.kalman_filtered_velocity = (
+                self.kalman_velocity_filter.input_latest_noisy_measurement(
+                    measured_velocity))
         else:
             past_position = self.filtered_position
             self.filtered_position = measured_position
             self.adjusted_position = self.filtered_position + (
                 self.filtered_position - past_position)
             self.measured_position = measured_position
-            self.kalman_filtered_position = self.kalman_position_filter.input_latest_noisy_measurement(
-                measured_position)
-            self.kalman_filtered_velocity = self.kalman_velocity_filter.input_latest_noisy_measurement(
-                measured_velocity)
+            self.kalman_filtered_position = (
+                self.kalman_position_filter.input_latest_noisy_measurement(
+                    measured_position))
+            self.kalman_filtered_velocity = (
+                self.kalman_velocity_filter.input_latest_noisy_measurement(
+                    measured_velocity))
         if self.is_filter[1]:
             past_velocity = self.filtered_velocity
             self.filtered_velocity = self.velocity_filter.applyFilter(
@@ -121,20 +125,24 @@ class PDController:
             self.adjusted_velocity = self.filtered_velocity + (
                 self.filtered_velocity - past_velocity)
             self.measured_velocity = measured_velocity
-            self.kalman_filtered_position = self.kalman_position_filter.input_latest_noisy_measurement(
-                measured_position)
-            self.kalman_filtered_velocity = self.kalman_velocity_filter.input_latest_noisy_measurement(
-                measured_velocity)
+            self.kalman_filtered_position = (
+                self.kalman_position_filter.input_latest_noisy_measurement(
+                    measured_position))
+            self.kalman_filtered_velocity = (
+                self.kalman_velocity_filter.input_latest_noisy_measurement(
+                    measured_velocity))
         else:
             past_velocity = self.filtered_velocity
             self.filtered_velocity = measured_velocity
             self.adjusted_velocity = self.filtered_velocity + (
                 self.filtered_velocity - past_velocity)
             self.measured_velocity = measured_velocity
-            self.kalman_filtered_position = self.kalman_position_filter.input_latest_noisy_measurement(
-                measured_position)
-            self.kalman_filtered_velocity = self.kalman_velocity_filter.input_latest_noisy_measurement(
-                measured_velocity)
+            self.kalman_filtered_position = (
+                self.kalman_position_filter.input_latest_noisy_measurement(
+                    measured_position))
+            self.kalman_filtered_velocity = (
+                self.kalman_velocity_filter.input_latest_noisy_measurement(
+                    measured_velocity))
 
     def reset(self, position, velocity, torque):
         # self.position_filter = FilterClass()

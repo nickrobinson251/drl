@@ -160,7 +160,7 @@ class FilterClass():
         # in the numerator
         self.clear_filter()
         C = 1.0/math.tan(math.pi*cutoff*T)
-        w = 2.0*C/T
+        # w = 2.0*C/T
         if (N > 4):
             N = 4
 
