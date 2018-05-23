@@ -3,16 +3,15 @@ from valkyrie.envs.filter import FilterClass, KalmanFilter
 
 
 class PDController:
-    def __init__(
-            self,
-            gains=[0, 0],
-            u_max=0,
-            v_max=0,
-            name=None,
-            is_filter=[False, False, False],
-            T=None,
-            cutoff=None,
-            N=None):
+    def __init__(self,
+                 gains=[0, 0],
+                 u_max=0,
+                 v_max=0,
+                 name=None,
+                 is_filter=[False, False, False],
+                 T=None,
+                 cutoff=None,
+                 N=None):
         self.Kp = gains[0]
         self.Kd = gains[1]
         self.name = name
@@ -86,8 +85,6 @@ class PDController:
 
         if self.is_filter[2]:
             u = self.torque_filter.applyFilter(u)
-        else:
-            u = u
         u = np.clip(u, -self.u_max, self.u_max)  # clipping torque
         self.u = u
         return u

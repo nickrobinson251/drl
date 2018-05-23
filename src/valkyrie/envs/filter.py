@@ -6,34 +6,31 @@ MAX_FILTER_LENGTH = 8
 
 class FilterClass():
     def __init__(self):
-        # defult constructor initialize all variables in 0
-
+        """Initialize all variables to 0."""
         self.Ncoeff = 6  # number of coefficients
         self.i = 0
         self.x = np.zeros(MAX_FILTER_LENGTH)
         self.y = np.zeros(MAX_FILTER_LENGTH)
         self.a = np.zeros(MAX_FILTER_LENGTH)
         self.b = np.zeros(MAX_FILTER_LENGTH)
-
         self.InitF = False
 
-    def int_diff_filter(self, X):
-        # initialize the differential filter with the initial value
+    def init_diff_filter(self, X):
+        """Iinitialize the differential filter with the initial value."""
         for i in range(MAX_FILTER_LENGTH):
             self.x[i] = X
 
     def clear_filter(self):
-        # clear the filter as constructor does
+        """Clear the filter as constructor does."""
         self.x = np.zeros(MAX_FILTER_LENGTH)
         self.y = np.zeros(MAX_FILTER_LENGTH)
         self.a = np.zeros(MAX_FILTER_LENGTH)
         self.b = np.zeros(MAX_FILTER_LENGTH)
 
     def least_squares_filter(self, T, N):
-        # recibe T as sample Time (s)
-        # N as the order for the filter
+        """T ias sample time in seconds, N is the order for the filter."""
+        self.clear_filter()  # prepare the filter
         freq = 1.0/float(T)  # Define the frequency
-        self.clear_filter()  # prepared the filter
 
         # according to the order N do
         if N == 4:
@@ -67,15 +64,14 @@ class FilterClass():
         for cnt in range(N):
             self.a[cnt] = C
 
-    # Build a butterwoth filter. T is the sample period,
-    # cutoff is the cutoff frequency in hertz, N is the order (1,2,3 or 4)
     def butterworth(self, T, cutoff, N):
-        self.clear_filter()
+        """Build a butterwoth filter.
 
-        if N > 4:
-            N = 4
-        if N == 0:
-            N = 1
+        T is the sample period,
+        cutoff is the cutoff frequency in hertz,
+        N is the order (1,2,3 or 4)
+        """
+        self.clear_filter()
         C = 1.0/math.tan(math.pi * cutoff * T)
 
         if N == 1:
@@ -128,6 +124,8 @@ class FilterClass():
             self.b[4] = (
                 1.0 - 2.6131259 * C + 3.4142136 * math.pow(C, 2) - 2.6131259 *
                  math.pow(C, 3) + math.pow(C, 4)) * A
+        else:
+            raise ValueError('N must be 1, 2, 3, or 4. Got N={}'.format(N))
 
     def initializeFilter(self, X):
         for i in range(MAX_FILTER_LENGTH):
@@ -135,8 +133,10 @@ class FilterClass():
             self.y[i] = X
 
     def applyFilter(self, X):
-        # assumes the filter was already run so that the coefficients are able
-        # receive the new input- return the filter signal
+        """Return filter signal from new input.
+
+        Assumes the filter was run so that the coefficients are available
+        """
         self.x[4] = self.x[3]
         self.x[3] = self.x[2]
         self.x[2] = self.x[1]
@@ -152,19 +152,19 @@ class FilterClass():
             self.y[3]*self.b[3]-self.y[4]*self.b[4]
         return self.y[0]
 
-    # Build a butterwoth differentiator. T is the sample period
-    # cutoff is the cutoff frequency in hertz, N is the order (1,2 or 3)
     def butterDifferentiator(self, T, cutoff, N):
-        # receive sample time T, cutoff frequency, and the order of the filter
-        # Generate the filter coefficients where a[0] is the zero order factor
-        # in the numerator
+        """Build a butterwoth differentiator.
+
+        T is the sample period
+        cutoff is the cutoff frequency in hertz
+        N is the order of the filter (1, 2, 3, or 4)
+        Generate the filter coefficients where a[0] is the zero order factor
+        in the numerator
+        """
         self.clear_filter()
         C = 1.0/math.tan(math.pi*cutoff*T)
-        # w = 2.0*C/T
-        if (N > 4):
-            N = 4
 
-        elif (N == 1):
+        if (N == 1):
             self.a[0] = 1.0
             self.a[1] = -1.0
             self.b[0] = T*(1.0+C)/2.0
@@ -204,10 +204,14 @@ class FilterClass():
                                - 4.0*math.pow(C, 4))
             self.b[4] = T/2.0*(1.0-2.6131259*C+3.4142136*math.pow(C, 2)
                                - 2.6131259*math.pow(C, 3)+math.pow(C, 4))
+        else:
+            raise ValueError('N must be 1, 2, 3, or 4. Got N={}'.format(N))
 
     def differentiator(self, X):
-        # assumes the filter was already run so that the coefficients are able
-        # receive the new input- return the filter signal
+        """Return filter signal from new input.
+
+        Assumes the filter was run so that the coefficients are available
+        """
         self.x[4] = self.x[3]
         self.x[3] = self.x[2]
         self.x[2] = self.x[1]
@@ -227,12 +231,11 @@ class FilterClass():
 
 class KalmanFilter(object):
 
-    def __init__(
-            self,
-            process_variance,
-            estimated_measurement_variance,
-            posteri_estimate=0.0,
-            posteri_error_estimate=1.0):
+    def __init__(self,
+                 process_variance,
+                 estimated_measurement_variance,
+                 posteri_estimate=0.0,
+                 posteri_error_estimate=1.0):
         self.process_variance = process_variance
         self.estimated_measurement_variance = estimated_measurement_variance
         self.posteri_estimate = posteri_estimate
