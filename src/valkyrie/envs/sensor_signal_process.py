@@ -2,7 +2,7 @@ import numpy as np
 from valkyrie.envs.filter import FilterClass
 
 
-class calCOP():
+class calculateCOP():
     def __init__(self, force_cuttoff_freq, pos_cutoff_freq, dt, order):
         self.left_foot_force_filter = [
             FilterClass(), FilterClass(), FilterClass()]
@@ -40,9 +40,10 @@ class calCOP():
 
     def __call__(self, right_contact_info, left_contact_info):
         """Calculate centre of pressure."""
-        leftFootCOP, leftF, leftFootCOPFlag = self.calFootCOP(left_contact_info)
+        leftFootCOP, leftF, leftFootCOPFlag = self.calculateFootCOP(
+                                                                    left_contact_info)
         self.left_COP_info = [leftFootCOP, leftF, leftFootCOPFlag]
-        rightFootCOP, rightF, rightFootCOPFlag = self.calFootCOP(
+        rightFootCOP, rightF, rightFootCOPFlag = self.calculateFootCOP(
             right_contact_info)
         self.right_COP_info = [rightFootCOP, rightF, rightFootCOPFlag]
 
@@ -68,7 +69,7 @@ class calCOP():
         return (COP, F, COPFlag, rightFootCOP, rightF, rightFootCOPFlag,
                 leftFootCOP, leftF, leftFootCOPFlag)
 
-    def calFootCOP(self, contact_info):
+    def calculateFootCOP(self, contact_info):
         """Calculate position of foot Center Of Pressure (COP).
 
         Returns
