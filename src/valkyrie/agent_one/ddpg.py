@@ -20,22 +20,16 @@ class DDPG:
         self.config = config
         # Randomly initialize actor network and critic network
         # with both their target networks
-        self.state_dim = config['state-dim']
-
+        self.state_dim = config['env']['state-dim']
         # waist, hip, knee, ankle env._actionDim
-        self.action_dim = config['action-dim']
+        self.action_dim = config['actor']['action-dim']
 
-        self.replay_buffer_size = config['replay-buffer-size']
-        self.replay_start_size = config['replay-start-size']
-        self.batch_size = config['batch-size']
-        self.gamma = config['gamma']
-        self.action_bounds = config['action-bounds']
-        # config['normalized-action-bounds']
-        self.actor_output_bounds = config['actor-output-bound']
-
-#        config = tf.ConfigProto()
-#        config.gpu_options.per_process_gpu_memory_fraction = 0.25
-#        self.sess = tf.InteractiveSession(configig)
+        self.replay_buffer_size = config['replay']['buffer-size']
+        self.replay_start_size = config['replay']['start-size']
+        self.batch_size = config['training']['batch-size']
+        self.gamma = config['env']['gamma']
+        self.action_bounds = config['actor']['action-bounds']
+        self.actor_output_bounds = config['actor']['action-bounds']
 
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.25)
         self.sess = tf.InteractiveSession(
@@ -56,13 +50,14 @@ class DDPG:
 
         # Initialize a random process the Ornstein-Uhlenbeck process for action
         # exploration
-        if self.config['noise-normalization']:
+        if self.config['noise']['use-normalization']:
             self.exploration_noise = OUNoise(
                 self.action_dim,
-                self.config['OU-noise-settings'][1] *
-                self.config['action-scale'],
-                self.config['OU-noise-settings'][2] *
-                self.config['action-scale'])
+                (self.config['noise']['OU-settings'][1]
+                 * self.config['actor']['action-scale']),
+                (self.config['noise']['OU-settings'][2]
+                 * self.config['actor']['action-scale'])
+            )
         else:
             self.exploration_noise = OUNoise(self.action_dim)
 
@@ -73,10 +68,10 @@ class DDPG:
 
         self.ob_normalize1 = BatchNormalize(
             self.state_dim,
-            config['replay-buffer-size'])  # TODO test observation normalization
+            config['replay']['buffer-size'])  # TODO test observation normalization
         self.ob_normalize2 = OnlineNormalize(
             self.state_dim,
-            config['replay-buffer-size'])  # TODO test observation normalization
+            config['replay']['buffer-size'])  # TODO test observation normalization
 
     def train(self):
         train_num = 1
@@ -84,7 +79,7 @@ class DDPG:
         for i in range(0, train_num):
             # Sample a random minibatch of N transitions from replay buffer
             tree_idx, batch_memory, ISWeights = [], [], []
-            if self.config['prioritized-exp-replay']:
+            if self.config['replay']['use-prioritized-experience']:
                 tree_idx, batch_memory, ISWeights = self.memory.sample(
                     self.batch_size)
             else:
@@ -96,10 +91,10 @@ class DDPG:
             next_state_batch = np.asarray([data[3] for data in batch_memory])
             done_batch = np.asarray([data[4] for data in batch_memory])
 
-            if self.config['normalize-observations']:
+            if self.config['training']['normalize-observations']:
                 state_batch = self.ob_normalize1.normalize(state_batch)
                 next_state_batch = self.ob_normalize1.normalize(
-                                                                next_state_batch)
+                    next_state_batch)
 
             # for action_dim = 1
             action_batch = np.resize(
@@ -128,7 +123,7 @@ class DDPG:
             # print(self.memory.tree.data_pointer)
             # print(tree_idx)
 
-            if self.config['prioritized-exp-replay']:
+            if self.config['replay']['use-prioritized-experience']:
                 # print(ISWeights)
                 ISWeights = np.asarray(ISWeights)
                 ISWeights = np.resize(ISWeights, [self.batch_size, 1])
@@ -162,13 +157,13 @@ class DDPG:
     def action_noise(self, state, epsilon=1, lamda=1):
         # Select action a_t according to the current policy and exploration
         # noise
-        if self.config['param-noise']:
+        if self.config['noise']['use-param-noise']:
             action = self.actor_network.action_noise(state)
             # print(self.actor_network.action_noise(state)-self.actor_network.action(state))
         else:
             action = self.actor_network.action(state)
         # print(self.exploration_noise.noise(action))
-        if self.config['OU-noise']:
+        if self.config['noise']['use-OU']:
             ou_noise = epsilon * lamda * self.exploration_noise.noise(action)
             # normalizing noise for each action output
             # if self.config['noise-normalization'] == True:
@@ -249,10 +244,10 @@ class DDPG:
 
     def reset(self):
         # Re-iniitialize the random process when an episode ends
-        if self.config['param-noise']:
+        if self.config['noise']['use-param-noise']:
             self.param_noise()
             #print(conf['param-noise'] == True)
-        if self.config['OU-noise']:
+        if self.config['noise']['use-OU']:
             self.exploration_noise.reset()
 
     def save_weight(self, time_step, dir_path):
@@ -276,7 +271,7 @@ class DDPG:
         # update parameter noise spec
         # self.actor_network.perturb_policy()
         distance = 0
-        if self.config['prioritized-exp-replay']:
+        if self.config['replay']['use-prioritized-experience']:
             if self.replay_buffer_count > self.replay_start_size:
                 #batch_memory = self.memory.sample_random(self.batch_size)
                 tree_idx, batch_memory, ISWeights = self.memory.sample(
@@ -308,7 +303,7 @@ class DDPG:
             self.replay_buffer_count,
             self.replay_buffer_size)
 
-        if self.config['prioritized-exp-replay']:
+        if self.config['replay']['use-prioritized-experience']:
             transition = (s, a, r, s_, d)
             # have high priority for newly arrived transition
             self.memory.store(transition)
@@ -319,7 +314,7 @@ class DDPG:
         if self.replay_buffer_count > (self.batch_size*2):
             # Sample a random minibatch of N transitions from replay buffer
             batch_memory = []
-            if self.config['prioritized-exp-replay']:
+            if self.config['replay']['use-prioritized-experience']:
                 tree_idx, batch_memory, ISWeights = self.memory.sample(
                     self.batch_size)
                 # print(self.memory.tree.data_pointer)

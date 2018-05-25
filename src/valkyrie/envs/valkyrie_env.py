@@ -212,6 +212,11 @@ class ValkyrieEnv(gym.Env):
         self.pd_torque_filtered = dict()
         self.pd_torque_unfiltered = dict()
         self.pd_torque_adjusted = dict()
+        self.hist_torque = dict()
+        self.hist_torque_target = dict()
+        for joint in self.controlled_joints:
+            self.hist_torque[joint] = 0.0
+            self.hist_torque_target[joint] = 0.0
 
         ##########
         # torque limits
@@ -311,6 +316,10 @@ class ValkyrieEnv(gym.Env):
         p.disconnect()
 
     def _setupSimulation(self, base_pos, base_orn, fixed_base=False):
+        if base_pos is None:
+            base_pos = self.default_base_pos
+        if base_orn is None:
+            base_orn = self.default_base_orn
         self._setupFilter()
         self.g = 9.806651
         # Physics engine parameter default solver iteration = 50
@@ -320,6 +329,7 @@ class ValkyrieEnv(gym.Env):
         p.setGravity(0, 0, -self.g)
         p.setTimeStep(self._dt)
         p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
+
         plane_urdf = os.path.join(CURRENT_DIR, "assets", "plane", "plane.urdf")
         self.plane = p.loadURDF(plane_urdf, basePosition=[0, 0, 0],
                                 useFixedBase=True)
@@ -331,8 +341,9 @@ class ValkyrieEnv(gym.Env):
             fileName=robot_urdf,
             basePosition=base_pos,
             baseOrientation=base_orn,
-            flags=p.URDF_USE_INERTIA_FROM_FILE or p.URDF_USE_SELF_COLLISION,
+            flags=p.URDF_USE_INERTIA_FROM_FILE | p.URDF_USE_SELF_COLLISION,
             useFixedBase=fixed_base)
+
         self._setupCamera()
         self._setupJointMapping()
         self._setDynamics()
@@ -363,7 +374,6 @@ class ValkyrieEnv(gym.Env):
         # record history of joint torque output for PD control
         self.action = dict()
         self.hist_torque = dict()
-        self.hist_torque_target = dict()
         for joint in self.controlled_joints:
             joint_state = p.getJointState(self.robot, self.joint_idx[joint])
             self.hist_torque[joint] = joint_state[3]
@@ -376,12 +386,12 @@ class ValkyrieEnv(gym.Env):
     def _reset(self,
                Kp=KP_DEFAULTS,
                Kd=KD_DEFAULTS,
-               default_base_pos=None,
-               default_base_orn=None,
+               base_pos=None,
+               base_orn=None,
                fixed_base=False):
         self.Kp = Kp  # proportional gain
         self.Kd = Kd  # derivative gain
-        self._setupSimulation(default_base_pos, default_base_orn, fixed_base)
+        self._setupSimulation(base_pos, base_orn, fixed_base)
         self._envStepCounter = 0
         self._observation = self.getExtendedObservation()
         # self._reading = self.getReading()

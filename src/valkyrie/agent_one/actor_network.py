@@ -13,18 +13,18 @@ class ActorNetwork:
 
     def __init__(self, sess, state_dim, action_dim, config):
         self.param_noise = AdaptiveParamNoise(
-            config['param-noise-settings'][0],
-            config['param-noise-settings'][1],
-            config['param-noise-settings'][2])
-        self.layer1_size = config['actor-layer-size'][0]
-        self.layer2_size = config['actor-layer-size'][1]
-        self.learning_rate = config['actor-lr']
-        self.tau = config['tau']
-        self.is_param_noise = config['param-noise']
-        self.is_layer_norm = config['actor-layer-norm']
-        self.is_observation_norm = config['actor-observation-norm']
+            config['noise']['param-noise-settings'][0],
+            config['noise']['param-noise-settings'][1],
+            config['noise']['param-noise-settings'][2])
+        self.layer1_size = config['actor']['layer-size'][0]
+        self.layer2_size = config['actor']['layer-size'][1]
+        self.learning_rate = config['actor']['lr']
+        self.tau = config['actor']['tau']
+        self.is_param_noise = config['noise']['use-param-noise']
+        self.is_layer_norm = config['actor']['use-layer-norm']
+        self.is_observation_norm = config['actor']['use-observation-norm']
 
-        self.activation_fn = config['actor-activation-fn']
+        self.activation_fn = config['actor']['activation-fn']
 
         #self.param_noise_stddev = tf.placeholder(tf.float32, shape=(), name='param_noise_stddev')
 

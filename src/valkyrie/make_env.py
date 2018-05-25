@@ -1,10 +1,10 @@
 import gym
 import time
-import valkyrie
-
+from valkyrie.envs.valkyrie_env import ValkyrieEnv
 
 def main():
-    env = gym.make('Valkyrie-v0')
+    # env = gym.make('Valkyrie-v0')
+    env = ValkyrieEnv()
     time.sleep(5)  # seconds
 
 

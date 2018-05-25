@@ -6,6 +6,7 @@ from pprint import pprint
 ACTION_DIM = 11
 NUM_CONTROLLED_JOINTS = 11
 REPLAY_START_SIZE = 10000
+TAU = 0.001  # weight given to the targt model
 
 ACTION_BOUNDS = {
     "torsoPitch": [-0.13, 0.67],
@@ -51,99 +52,10 @@ config['env'] = {
     "LLC-frequency": 500,
     "HLC-frequency": 25,
     "use-bullet-default-PD": False,
-    "state-dim": 60
+    "state-dim": 60,
+    "gamma": 0.99
 }
-
-config['training'] = {
-    "action-dim": ACTION_DIM,
-    "batch-size": 256,
-    "tau": 0.001,
-    "gamma": 0.99,
-    "popart": False,
-    "normalize-returns": False,
-    "normalize-observations": False,
-    "reward-scale": 0.1,  # 1.0
-    "epoch-num": 50000,
-    "epoch-step-num": 50000,
-    "total-step-num": 250000000,
-    "max-train-time": 16,  # seconds,
-    "max-test-time": 30,  # seconds,
-    "test-num": 1,
-    "rollout-step-num": 1,
-    "train-step-num": 1
-}
-
-config["replay"] = {
-    "use-prioritized-experience": True,
-    "buffer-size": 2000000,
-    "start-size": REPLAY_START_SIZE,
-    "record-start-size": REPLAY_START_SIZE*1.01
-}
-
-config["noise"] = {
-    "use-param-noise": False,
-    "param-noise-settings": [0.05, 0.2, 1.01],
-    "use-OU": True,
-    "OU-noise-settings": [0.0, 0.15, 0.3],  # mu, theta, sigma
-    "use-normalization": True
-}
-
-config["critic"] = {
-    "use-layer-norm": False,
-    "use-observation-norm": False,  # use batch norm to normalize observations
-    "use-dropout": False,
-    "dropout-rate": 0.5,
-    "l2-reg": 1e-2,
-    "lr": 1e-3,
-    "layer-size": [400, 400],
-    "activation-fn": "relu"
-}
-
-config["actor"] = {
-    "use-layer-norm": False,
-    "use-observation-norm": False,
-    "use-dropout": False,
-    "dropout-rate": 0.5,
-    "l2-reg": 1e-2,
-    "lr": 1e-4,
-    "layer-size": [400, 400],
-    "activation-fn": "relu",
-    "output-bound-method": "grad-invert",  # "tanh"
-    # "output-bound": config["action-bounds"]
-}
-config["actor"]["action-joints"] = [  # default to 11 pitch and roll joints
-        "torsoPitch",
-        "rightHipPitch",
-        "rightHipRoll",
-        "leftHipPitch",
-        "leftHipRoll",
-        "rightKneePitch",
-        "leftKneePitch",
-        "rightAnklePitch",
-        "rightAnkleRoll",
-        "leftAnklePitch",
-        "leftAnkleRoll"]
-if ACTION_DIM >= 12:
-    config["actor"]["action-joints"].append("torsoRoll")
-if ACTION_DIM >= 13:
-    config["actor"]["action-joints"].append("rightHipYaw")
-
-# bound actions. transpose so  array[0] are lowwer bound, [1] are upper bounds
-config['action-bounds'] = np.array(
-    [ACTION_BOUNDS[joint] for joint in config["actor"]["action-joints"]]).T
-config['action-bounds-normalised'] = np.array(
-    [ACTION_BOUNDS_NORMALISED[joint]
-        for joint in config["actor"]["action-joints"]]).T
-
-# clip exploration range for joints with large limits
-config["action-scale"] = 0.5 * np.clip(
-    config['action-bounds'][1] - config['action-bounds'][0], 0, 2.09)
-config['actor']['logstd-initial'] = np.log(config["action-scale"]/2)
-config['actor']['logstd-bounds'] = np.zeros_like(config['action-bounds'])
-config['actor']['logstd-bounds'][0] = np.log(config["action-scale"]/10)
-config['actor']['logstd-bounds'][1] = np.log(config["action-scale"]/2)
-
-config["controlled-joints"] = [  # default to controlling 7 pitch joints
+config['env']["controlled-joints"] = [  # default to controlling 7 pitch joints
     "torsoPitch",
     "rightHipPitch",
     "leftHipPitch",
@@ -152,17 +64,17 @@ config["controlled-joints"] = [  # default to controlling 7 pitch joints
     "rightAnklePitch",
     "leftAnklePitch"]
 if NUM_CONTROLLED_JOINTS >= 11:
-    config["controlled-joints"].extend([
+    config['env']["controlled-joints"].extend([
         "rightHipRoll",
         "leftHipPitch",
         "rightAnkleRoll",
         "leftAnkleRoll"])
 if NUM_CONTROLLED_JOINTS >= 12:
-    config["controlled-joints"].append("torsoRoll")
+    config['env']["controlled-joints"].append("torsoRoll")
 if NUM_CONTROLLED_JOINTS >= 13:
-    config["controlled-joints"].append("rightHipYaw")
+    config['env']["controlled-joints"].append("rightHipYaw")
 
-config["Kp"] = {
+config['env']["Kp"] = {
     "torsoYaw": 4500,
     "torsoPitch": 3000,
     "torsoRoll": 4500,
@@ -188,7 +100,7 @@ config["Kp"] = {
     "leftElbowPitch": 200,
 }
 
-config["Kd"] = {
+config['env']["Kd"] = {
     "torsoYaw": 30,
     "torsoPitch": 300,
     "torsoRoll": 30,
@@ -214,6 +126,96 @@ config["Kd"] = {
     "leftElbowPitch": 5,
 }
 
+config['training'] = {
+    "batch-size": 256,
+    "popart": False,
+    "normalize-returns": False,
+    "normalize-observations": False,
+    "reward-scale": 0.1,  # 1.0
+    "epoch-num": 50000,
+    "epoch-step-num": 50000,
+    "total-step-num": 250000000,
+    "max-train-time": 16,  # seconds,
+    "max-test-time": 30,  # seconds,
+    "test-num": 1,
+    "rollout-step-num": 1,
+    "train-step-num": 1
+}
+
+config["replay"] = {
+    "use-prioritized-experience": True,
+    "buffer-size": 2000000,
+    "start-size": REPLAY_START_SIZE,
+    "record-start-size": REPLAY_START_SIZE*1.01
+}
+
+config["noise"] = {
+    "use-param-noise": False,
+    "param-noise-settings": [0.05, 0.2, 1.01],
+    "use-OU": True,
+    "OU-settings": [0.0, 0.15, 0.3],  # mu, theta, sigma
+    "use-normalization": True
+}
+
+config["critic"] = {
+    "tau": TAU,
+    "use-layer-norm": False,
+    "use-observation-norm": False,  # use batch norm to normalize observations
+    "use-dropout": False,
+    "dropout-rate": 0.5,
+    "l2-reg": 1e-2,
+    "lr": 1e-3,
+    "layer-size": [400, 400],
+    "activation-fn": "relu"
+}
+
+config["actor"] = {
+    "tau": TAU,
+    "use-layer-norm": False,
+    "use-observation-norm": False,
+    "use-dropout": False,
+    "dropout-rate": 0.5,
+    "l2-reg": 1e-2,
+    "lr": 1e-4,
+    "layer-size": [400, 400],
+    "activation-fn": "relu",
+    "output-bound-method": "grad-invert",  # "tanh"
+    "action-dim": ACTION_DIM
+}
+config["actor"]["action-joints"] = [  # default to 11 pitch and roll joints
+        "torsoPitch",
+        "rightHipPitch",
+        "rightHipRoll",
+        "leftHipPitch",
+        "leftHipRoll",
+        "rightKneePitch",
+        "leftKneePitch",
+        "rightAnklePitch",
+        "rightAnkleRoll",
+        "leftAnklePitch",
+        "leftAnkleRoll"]
+if ACTION_DIM >= 12:
+    config["actor"]["action-joints"].append("torsoRoll")
+if ACTION_DIM >= 13:
+    config["actor"]["action-joints"].append("rightHipYaw")
+
+# bound actions. transpose so  array[0] are lowwer bound, [1] are upper bounds
+config["actor"]['action-bounds'] = np.array(
+    [ACTION_BOUNDS[joint] for joint in config["actor"]["action-joints"]]).T
+config["actor"]['action-bounds-normalised'] = np.array(
+    [ACTION_BOUNDS_NORMALISED[joint]
+        for joint in config["actor"]["action-joints"]]).T
+
+# clip exploration range for joints with large limits
+config["actor"]["action-scale"] = 0.5 * np.clip(
+    config["actor"]['action-bounds'][1] - config["actor"]['action-bounds'][0],
+    0, 2.09)
+config['actor']['logstd-initial'] = np.log(config["actor"]["action-scale"]/2)
+config['actor']['logstd-bounds'] = np.zeros_like(
+    config["actor"]['action-bounds'])
+config['actor']['logstd-bounds'][0] = np.log(config["actor"]["action-scale"]/10)
+config['actor']['logstd-bounds'][1] = np.log(config["actor"]["action-scale"]/2)
+
 
 def save_configuration(config, dir):
     """Write cnfiguration dict to dir/'configuration.pickle'."""
@@ -235,7 +237,3 @@ def record_configuration(config, dir):
     txt_file = open(dir + "/configuration.txt", "w")
     pprint(config, stream=txt_file)
     txt_file.close()
-
-
-def print_configuration(config):
-    pprint(config)

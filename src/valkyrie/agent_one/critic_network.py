@@ -9,36 +9,38 @@ class CriticNetwork:
     """docstring for CriticNetwork"""
 
     def __init__(self, sess, state_dim, action_dim, config):
-        self.layer1_size = config['critic-layer-size'][0]
-        self.layer2_size = config['critic-layer-size'][1]
-        self.learning_rate = config['critic-lr']
-        self.tau = config['tau']
-        self.l2 = config['critic-l2-reg']
-        self.is_prioritized_replay = config['prioritized-exp-replay']
-        self.is_layer_norm = config['critic-layer-norm']
-        self.is_observation_norm = config['critic-observation-norm']
-
-        self.activation_fn = config['critic-activation-fn']
+        self.layer1_size = config['critic']['layer-size'][0]
+        self.layer2_size = config['critic']['layer-size'][1]
+        self.learning_rate = config['critic']['lr']
+        self.tau = config['critic']['tau']
+        self.l2 = config['critic']['l2-reg']
+        self.is_prioritized_replay = config['replay'][
+            'use-prioritized-experience']
+        self.is_layer_norm = config['critic']['use-layer-norm']
+        self.is_observation_norm = config['critic']['use-observation-norm']
+        self.activation_fn = config['critic']['activation-fn']
 
         self.time_step = 0
         self.sess = sess
         # create q network
         self.critic_network = {}
-        self.state_input, \
-            self.action_input, \
-            self.q_value_output, \
-            self.critic_network['vars'], \
-            self.critic_network['trainable_vars'], \
-            self.critic_network['perturbable_vars'] = self.create_q_network(state_dim, action_dim, 'critic_network')
+        (self.state_input,
+         self.action_input,
+         self.q_value_output,
+         self.critic_network['vars'],
+         self.critic_network['trainable_vars'],
+         self.critic_network['perturbable_vars']) = self.create_q_network(
+                state_dim, action_dim, 'critic_network')
 
         # create target q network (the same structure with q network)
         self.target_critic_network = {}
-        self.target_state_input, \
-            self.target_action_input, \
-            self.target_q_value_output, \
-            self.target_critic_network['vars'], \
-            self.target_critic_network['trainable_vars'], \
-            self.target_critic_network['perturbable_vars'] = self.create_q_network(state_dim, action_dim, 'target_critic_network')
+        (self.target_state_input,
+         self.target_action_input,
+         self.target_q_value_output,
+         self.target_critic_network['vars'],
+         self.target_critic_network['trainable_vars'],
+         self.target_critic_network['perturbable_vars']) = self.create_q_network(
+                state_dim, action_dim, 'target_critic_network')
 
         self.create_training_method()
         self.setup_target_network_updates()
@@ -67,7 +69,9 @@ class CriticNetwork:
                     self.y_input -
                     self.q_value_output))
             self.cost = self.loss + weight_decay
-            #self.cost = tf.reduce_mean(self.ISWeights * tf.squared_difference(self.y_input, self.q_value_output)) + weight_decay
+            # self.cost = tf.reduce_mean(
+            #   self.ISWeights * tf.squared_difference(
+            #       self.y_input, self.q_value_output)) + weight_decay
         else:
             self.loss = tf.reduce_mean(
                 tf.square(
@@ -103,11 +107,12 @@ class CriticNetwork:
 
             if self.is_layer_norm:
                 layer1 = tf.matmul(state_input, W1) + b1
-                # , activation_fn=tf.nn.relu)#normalize layer before activation function?
+                # activation_fn=tf.nn.relu
+                # normalize layer before activation function?
                 layer1_norm = tc.layers.layer_norm(
                     layer1, center=True, scale=True)
-                # layer1_norm = tf.nn.relu(layer1_norm)seed =
-                # int(datetime.now().strftime('%S%f'))
+                # layer1_norm = tf.nn.relu(layer1_norm)
+                # seed = int(datetime.now().strftime('%S%f'))
                 layer1_norm = self.add_activation_fn(
                     layer1_norm, self.activation_fn)
                 layer2 = (
@@ -119,8 +124,8 @@ class CriticNetwork:
                         W2_action) +
                     b2)
                 layer2_norm = tc.layers.layer_norm(
-                    layer2, center=True, scale=True)  # , activation_fn=tf.nn.relu)
-                #layer2_norm = tf.nn.relu(layer2_norm)
+                    layer2, center=True, scale=True)  # activation_fn=tf.nn.relu
+                # layer2_norm = tf.nn.relu(layer2_norm)
                 layer2_norm = self.add_activation_fn(
                     layer2_norm, self.activation_fn)
                 q_value_output = tf.identity(tf.matmul(layer2_norm, W3) + b3)
@@ -145,7 +150,13 @@ class CriticNetwork:
             tf.GraphKeys.TRAINABLE_VARIABLES, scope=name)
         perturbable_vars = [var for var in trainable_vars
                             if 'LayerNorm' not in var.name]
-        return state_input, action_input, q_value_output, vars, trainable_vars, perturbable_vars
+        return (
+            state_input,
+            action_input,
+            q_value_output,
+            vars,
+            trainable_vars,
+            perturbable_vars)
 
     def update_target(self):
         self.sess.run(self.target_soft_updates)
@@ -155,18 +166,22 @@ class CriticNetwork:
         abs_errors = 0
         loss = 0
         if self.is_prioritized_replay:
-            loss, abs_errors, _ = self.sess.run([self.loss, self.abs_errors, self.optimizer], feed_dict={
-                self.y_input: y_batch,
-                self.state_input: state_batch,
-                self.action_input: action_batch,
-                self.ISWeights: ISWeights
-            })
+            loss, abs_errors, _ = self.sess.run(
+                [self.loss, self.abs_errors, self.optimizer],
+                feed_dict={
+                    self.y_input: y_batch,
+                    self.state_input: state_batch,
+                    self.action_input: action_batch,
+                    self.ISWeights: ISWeights
+                })
         else:
-            loss, _ = self.sess.run([self.loss, self.optimizer], feed_dict={
-                self.y_input: y_batch,
-                self.state_input: state_batch,
-                self.action_input: action_batch
-            })
+            loss, _ = self.sess.run(
+                [self.loss, self.optimizer],
+                feed_dict={
+                    self.y_input: y_batch,
+                    self.state_input: state_batch,
+                    self.action_input: action_batch
+                })
         return loss, abs_errors
 
     def gradients(self, state_batch, action_batch):
@@ -202,7 +217,9 @@ class CriticNetwork:
 
     def setup_target_network_updates(self):
         actor_init_updates, actor_soft_updates = self.get_target_updates(
-            self.critic_network['vars'], self.target_critic_network['vars'], self.tau)
+            self.critic_network['vars'],
+            self.target_critic_network['vars'],
+            self.tau)
         self.target_init_updates = actor_init_updates
         self.target_soft_updates = actor_soft_updates
 
@@ -234,12 +251,11 @@ class CriticNetwork:
 
     # f fan-in size
     def variable(self, shape, f):
-        #seed = int(datetime.now().strftime('%S%f'))
+        # seed = int(datetime.now().strftime('%S%f'))
         # return tf.Variable(tf.random_uniform(shape, -1 / math.sqrt(f), 1 /
         # math.sqrt(f), seed=seed))
-        return tf.Variable(
-            tf.random_uniform(
-                shape, -1 / math.sqrt(f), 1 / math.sqrt(f)))
+        return tf.Variable(tf.random_uniform(
+                shape, -1/math.sqrt(f), 1/math.sqrt(f)))
         # return tf.Variable(tf.random_normal(shape))
 
     def add_layer(
@@ -306,7 +322,7 @@ class CriticNetwork:
             dir_path +
             '/saved_critic_networks/' +
             'critic-network')  # , global_step = time_step)
-        #self.saver.save(self.sess, 'critic-network')
+        # self.saver.save(self.sess, 'critic-network')
 
     def save_variable(self, time_step, dir_path):
         var_dict = {}
