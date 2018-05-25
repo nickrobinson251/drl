@@ -4,7 +4,7 @@ import math
 import numpy as np
 import os
 
-from configuration import Configuration
+from configuration import config
 from ddpg import DDPG
 from interpolate import JointTrajectoryInterpolate
 from logger import logger
@@ -20,23 +20,22 @@ def main():
     else:
         path_str = 'without_external_force_disturbance/'
     DIR_PATH = 'record/'+'3D/' + path_str + datetime.now().strftime('%Y_%m_%d_%H.%M.%S')
-    config = Configuration()
 
-    EPISODES = config.conf['epoch-num']
-    TEST = config.conf['test-num']
-    step_lim = config.conf['total-step-num']
-    PD_frequency = config.conf['LLC-frequency']
-    Physics_frequency = config.conf['Physics-frequency']
-    network_frequency = config.conf['HLC-frequency']
+    EPISODES = config['epoch-num']
+    TEST = config['test-num']
+    step_lim = config['total-step-num']
+    PD_frequency = config['LLC-frequency']
+    Physics_frequency = config['Physics-frequency']
+    network_frequency = config['HLC-frequency']
     sampling_skip = int(PD_frequency/network_frequency)
 
     reward_decay = 1.0
-    reward_scale = config.conf['reward-scale']
+    reward_scale = config['reward-scale']
     # /10.0#normalizing reward to 1#1.0/float(sampling_skip)
     reward_scale = reward_scale/float(sampling_skip)
-    max_train_time = config.conf['max-train-time']
+    max_train_time = config['max-train-time']
     max_train_steps = int(max_train_time*network_frequency)
-    max_test_time = config.conf['max-test-time']
+    max_test_time = config['max-test-time']
     max_test_steps = int(max_test_time*network_frequency)
     BEST_REWARD = 0
 
@@ -46,11 +45,11 @@ def main():
         initial_gap_time=1,
         PD_freq=PD_frequency,
         Physics_freq=Physics_frequency,
-        Kp=config.conf['Kp'],
-        Kd=config.conf['Kd'],
-        bullet_default_PD=config.conf['bullet-default-PD'],
-        controlled_joints_list=config.conf['controlled-joints'])
-    config.conf['state-dim'] = env.stateNumber
+        Kp=config['Kp'],
+        Kd=config['Kd'],
+        bullet_default_PD=config['bullet-default-PD'],
+        controlled_joints_list=config['controlled-joints'])
+    config['state-dim'] = env.stateNumber
     agent = DDPG(env, config)
 
     # load weight from previous network
@@ -73,9 +72,9 @@ def main():
 
     prev_action = np.zeros((agent.action_dim,))
 
-    if config.conf['joint-interpolation']:
+    if config['joint-interpolation']:
         joint_interpolate = {}
-        for joint in config.conf['actor-action-joints']:
+        for joint in config['actor-action-joints']:
             interpolate = JointTrajectoryInterpolate()
             #joint_interpolate[joint] = interpolate
             joint_interpolate.update({joint: interpolate})
@@ -84,12 +83,12 @@ def main():
 
     for episode in range(EPISODES):
         #state = env._reset()
-        state = env._reset(Kp=config.conf['Kp'], Kd=config.conf['Kd'])
+        state = env._reset(Kp=config['Kp'], Kd=config['Kd'])
 
         # Train
         # 4 dimension output of actor network, hip, knee, waist, ankle
-        action = np.zeros((len(config.conf['actor-action-joints']),))
-        control_action = np.zeros((len(config.conf['controlled-joints']),))
+        action = np.zeros((len(config['actor-action-joints']),))
+        control_action = np.zeros((len(config['controlled-joints']),))
         next_state, reward, done, _ = env._step(control_action)
         #next_state = Valkyrie.getExtendedObservation()
 
@@ -99,13 +98,13 @@ def main():
         while 1 > 0:  # infinite loop
             rollout = 0
 
-            for rollout in range(config.conf['rollout-step-num']):
+            for rollout in range(config['rollout-step-num']):
                 step += 1  # step count within an episode
                 step_count += 1  # counting total steps during training
                 prev_action = np.array(action)
                 # update action
                 state = env.getExtendedObservation()
-                if agent.config.conf['normalize-observations']:
+                if agent.config['normalize-observations']:
                     state_norm = agent.ob_normalize1.normalize(
                         np.asarray(state))
                     state_norm = np.reshape(
@@ -118,10 +117,10 @@ def main():
                 # print(action)
                 # env.render()
                 reward_add = 0
-                if config.conf['joint-interpolation']:
+                if config['joint-interpolation']:
                     # setup joint interpolation
-                    for n in range(len(config.conf['actor-action-joints'])):
-                        joint_name = config.conf['actor-action-joints'][n]
+                    for n in range(len(config['actor-action-joints'])):
+                        joint_name = config['actor-action-joints'][n]
                         joint_interpolate[joint_name].cubic_interpolation_setup(
                             prev_action[n], 0, action[n], 0, 1.0 / float(network_frequency))
 
@@ -139,9 +138,9 @@ def main():
                     force = [0, 0, 0]
 
                 for i in range(sampling_skip):
-                    if config.conf['joint-interpolation']:
-                        for n in range(len(config.conf['actor-action-joints'])):
-                            joint_name = config.conf['actor-action-joints'][n]
+                    if config['joint-interpolation']:
+                        for n in range(len(config['actor-action-joints'])):
+                            joint_name = config['actor-action-joints'][n]
                             action[n] = joint_interpolate[joint_name].interpolate(
                                 1.0 / PD_frequency)
 
@@ -202,7 +201,7 @@ def main():
                 if step > max_train_steps:
                     break
 
-            train_step = min(rollout+1, config.conf['train-step-num'])
+            train_step = min(rollout+1, config['train-step-num'])
             for train in range(train_step):
                 loss = agent.perceive()
                 logging.add_train('critic_loss', loss)
@@ -214,23 +213,23 @@ def main():
 
         if episode == 1 or (
                 episode %
-                10 == 0 and step_count > config.conf['record-start-size']):
+                10 == 0 and step_count > config['record-start-size']):
             total_reward = 0
             for i in range(TEST):
                 #_ = env._reset()
-                _ = env._reset(Kp=config.conf['Kp'], Kd=config.conf['Kd'])
+                _ = env._reset(Kp=config['Kp'], Kd=config['Kd'])
 
                 # 4 dimension output of actor network, hip, knee, waist, ankle
-                action = np.zeros((len(config.conf['actor-action-joints']),))
+                action = np.zeros((len(config['actor-action-joints']),))
                 control_action = np.zeros(
-                    (len(config.conf['controlled-joints']),))
+                    (len(config['controlled-joints']),))
                 state, reward, done, _ = env._step(control_action)
 
                 for j in range(max_test_steps):
                     prev_action = np.array(action)
 
                     state = env.getExtendedObservation()
-                    if agent.config.conf['normalize-observations']:
+                    if agent.config['normalize-observations']:
                         state_norm = agent.ob_normalize1.normalize(np.asarray(
                                                                        state))
                         state_norm = np.reshape(
@@ -241,10 +240,10 @@ def main():
                     #action = np.clip(action, action_bounds[0], action_bounds[1])
 
                     reward_add = 0
-                    if config.conf['joint-interpolation']:
+                    if config['joint-interpolation']:
                         # setup joint interpolation
-                        for n in range(len(config.conf['actor-action-joints'])):
-                            joint_name = config.conf['actor-action-joints'][n]
+                        for n in range(len(config['actor-action-joints'])):
+                            joint_name = config['actor-action-joints'][n]
                             joint_interpolate[joint_name].cubic_interpolation_setup(
                                 prev_action[n], 0, action[n], 0, 1.0 / float(network_frequency))
 
@@ -288,10 +287,10 @@ def main():
                     for k in range(sampling_skip):
                         # if(sampling_skip%10==0):
                             # env.render()
-                        if config.conf['joint-interpolation']:
+                        if config['joint-interpolation']:
                             for n in range(
-                                    len(config.conf['actor-action-joints'])):
-                                joint_name = config.conf['actor-action-joints'][n]
+                                    len(config['actor-action-joints'])):
+                                joint_name = config['actor-action-joints'][n]
                                 action[n] = joint_interpolate[joint_name].interpolate(
                                     1.0 / PD_frequency)
 
@@ -345,7 +344,7 @@ def main():
 
             ave_reward = total_reward/TEST
             # save training data
-            if BEST_REWARD < ave_reward and step_count > config.conf['record-start-size']:
+            if BEST_REWARD < ave_reward and step_count > config['record-start-size']:
                 BEST_REWARD = ave_reward
                 agent.save_weight(step_count, DIR_PATH)
             print(

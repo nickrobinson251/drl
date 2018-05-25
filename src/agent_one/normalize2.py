@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 import pickle
 
-class BatchNormallize:
+class BatchNormalize:
     def __init__(self, size, length):
         self.size = size
         self.mean = np.zeros((1,self.size))

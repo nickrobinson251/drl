@@ -22,17 +22,17 @@ def main():
 	config.load_configuration(dir_path)
 	config.print_configuration()
 
-	ENV_NAME = config.conf['env-id']  # 'HumanoidBalanceFilter-v0'#'HumanoidBalance-v0'
-	EPISODES = config.conf['epoch-num']
-	TEST = config.conf['test-num']
-	step_lim = config.conf['total-step-num']
+	ENV_NAME = config['env-id']  # 'HumanoidBalanceFilter-v0'#'HumanoidBalance-v0'
+	EPISODES = config['epoch-num']
+	TEST = config['test-num']
+	step_lim = config['total-step-num']
 
-	episode_count = config.conf['epoch-num']
-	action_bounds = config.conf['action-bounds']
+	episode_count = config['epoch-num']
+	action_bounds = config['action-bounds']
 
-	PD_frequency = config.conf['LLC-frequency']
-	Physics_frequency = config.conf['Physics-frequency']
-	network_frequency = config.conf['HLC-frequency']
+	PD_frequency = config['LLC-frequency']
+	Physics_frequency = config['Physics-frequency']
+	network_frequency = config['HLC-frequency']
 	sampling_skip = int(PD_frequency / network_frequency)
 
 	reward_decay = 1.0
@@ -51,10 +51,10 @@ def main():
 	force_pelvis = [0, 0]
 	force_period = [5 * PD_frequency, (5 + 0.1) * PD_frequency]  # impulse / force * FPS
 
-	env = Valkyrie(max_time=max_time, renders=True, initial_gap_time=1.0, PD_freq=PD_frequency, Physics_freq=Physics_frequency, Kp=config.conf['Kp'],
-                   Kd=config.conf['Kd'], bullet_default_PD=config.conf['bullet-default-PD'],
+	env = Valkyrie(max_time=max_time, renders=True, initial_gap_time=1.0, PD_freq=PD_frequency, Physics_freq=Physics_frequency, Kp=config['Kp'],
+                   Kd=config['Kd'], bullet_default_PD=config['bullet-default-PD'],
 				   logFileName = os.path.dirname(os.path.realpath(__file__))+'/'+dir_path,
-				   controlled_joints_list=config.conf['controlled-joints'])
+				   controlled_joints_list=config['controlled-joints'])
 	#env._setupCamera(cameraDistance=2.0, cameraYaw=0, cameraPitch=-15, cameraTargetPosition=[0, 0, 1.0])
 	#env._setupCamera(cameraDistance=1.5, cameraYaw=90, cameraPitch=0, cameraTargetPosition=[0, 0, 0.7])
 	env._setupCamera(cameraDistance=2.0, cameraYaw=90, cameraPitch=-15, cameraTargetPosition=[0, 0, 1.0])
@@ -80,16 +80,16 @@ def main():
 	prev_action = []
 
 	interpolate = dict()
-	if config.conf['joint-interpolation'] == True:
+	if config['joint-interpolation'] == True:
 		joint_interpolate = {}
-		for joint in config.conf['actor-action-joints']:
+		for joint in config['actor-action-joints']:
 			interpolate = JointTrajectoryInterpolate()
 			# joint_interpolate[joint] = interpolate
 			joint_interpolate.update({joint: interpolate})
 
 	for i in range(TEST):
 		#_ = env._reset()
-		_ = env._reset(Kp=config.conf['Kp'], Kd=config.conf['Kd'])
+		_ = env._reset(Kp=config['Kp'], Kd=config['Kd'])
 		#env.resetJointStates(base_orn_nom=[0,0,0.707,0.707])
 
 		step_count = 0
@@ -97,9 +97,9 @@ def main():
 
 		_ = agent.reset()
 		env._startLoggingVideo()
-		action = np.zeros((len(config.conf['actor-action-joints']),))  # 4 dimension output of actor network, hip, knee, waist, ankle
-		action_interpolate = np.zeros((len(config.conf['actor-action-joints']),))  # 4 dimension output of actor network, hip, knee, waist, ankle
-		control_action = np.zeros((len(config.conf['controlled-joints']),))
+		action = np.zeros((len(config['actor-action-joints']),))  # 4 dimension output of actor network, hip, knee, waist, ankle
+		action_interpolate = np.zeros((len(config['actor-action-joints']),))  # 4 dimension output of actor network, hip, knee, waist, ankle
+		control_action = np.zeros((len(config['controlled-joints']),))
 		state, reward, done, _ = env._step(control_action)
 
 		for j in range(max_steps):
@@ -113,7 +113,7 @@ def main():
 			#t0 = time.time()
 			#update action
 			state = env.getExtendedObservation()
-			if agent.config.conf['normalize-observations']:
+			if agent.config['normalize-observations']:
 				state_norm = agent.ob_normalize1.normalize(np.asarray(state))
 				state_norm = np.reshape(state_norm, (agent.state_dim))  # reshape intp(?,)
 			else:
@@ -134,10 +134,10 @@ def main():
 
 			readings = env.getReading()
 
-			if config.conf['joint-interpolation'] == True:
+			if config['joint-interpolation'] == True:
 				# setup joint interpolation
-				for n in range(len(config.conf['actor-action-joints'])):
-					joint_name = config.conf['actor-action-joints'][n]
+				for n in range(len(config['actor-action-joints'])):
+					joint_name = config['actor-action-joints'][n]
 					joint_interpolate[joint_name].cubic_interpolation_setup(prev_action[n], 0, action[n], 0,
 																			1.0 / float(network_frequency))
 
@@ -161,9 +161,9 @@ def main():
 				else:
 					text = ''
 
-				if config.conf['joint-interpolation'] == True:
-					for n in range(len(config.conf['actor-action-joints'])):
-						joint_name = config.conf['actor-action-joints'][n]
+				if config['joint-interpolation'] == True:
+					for n in range(len(config['actor-action-joints'])):
+						joint_name = config['actor-action-joints'][n]
 						action_interpolate[n] = joint_interpolate[joint_name].interpolate(1.0 / PD_frequency)
 
 				if len(control_action) == 7 and len(action) == 4:
