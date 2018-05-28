@@ -5,6 +5,9 @@ MAX_FILTER_LENGTH = 8
 
 
 class FilterClass():
+    def __repr__(self):
+        return str(self.__class__)
+
     def __init__(self):
         """Initialize all variables to 0."""
         self.Ncoeff = 6  # number of coefficients
@@ -67,9 +70,14 @@ class FilterClass():
     def butterworth(self, T, cutoff, N):
         """Build a butterwoth filter.
 
-        T is the sample period,
-        cutoff is the cutoff frequency in hertz,
-        N is the order (1,2,3 or 4)
+        Parameters
+        ----------
+        T : int
+            Sample period
+        cutoff : list
+            Cutoff frequency in hertz
+        N : int
+            Order (1, 2, 3, or 4)
         """
         self.clear_filter()
         C = 1.0/math.tan(math.pi * cutoff * T)
@@ -230,6 +238,8 @@ class FilterClass():
 
 
 class KalmanFilter(object):
+    def __repr__(self):
+        return str(self.__class__)
 
     def __init__(self,
                  process_variance,
@@ -259,6 +269,9 @@ class KalmanFilter(object):
 
 
 class BinaryFilter(object):  # TODO need some changes
+    def __repr__(self):
+        return str(self.__class__)
+
     # trigger based on boolean judgement
     def __init__(self, initState, counter):
         self.counterActivation = 0
@@ -288,6 +301,9 @@ class BinaryFilter(object):  # TODO need some changes
 
 
 class EMAFilter():
+    def __repr__(self):
+        return str(self.__class__)
+
     def __init__(self, gamma):
         self.y = 0.0
         self.gamma = gamma

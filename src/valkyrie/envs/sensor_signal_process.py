@@ -3,6 +3,9 @@ from valkyrie.envs.filter import FilterClass
 
 
 class calculateCOP():
+    def __repr__(self):
+        return str(self.__class__)
+
     def __init__(self, force_cuttoff_freq, pos_cutoff_freq, dt, order):
         self.left_foot_force_filter = [
             FilterClass(), FilterClass(), FilterClass()]

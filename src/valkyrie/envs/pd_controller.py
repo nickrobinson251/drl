@@ -1,17 +1,41 @@
 import numpy as np
+from pprint import pformat
+
 from valkyrie.envs.filter import FilterClass, KalmanFilter
 
 
 class PDController:
+    """PD Contoller class.
+
+    Parameters
+    ----------
+    T : int
+        Sample period of Butterworth filter
+    cutoff : list of length 3
+        Cutoff frequency in hertz for position velocity torque
+    N : int
+        Order of filter (1, 2, 3, or 4)
+    """
+    def __repr__(self):
+        return "PDController({})".format(pformat(dict(
+                 gains=[self.Kp, self.Kd],
+                 u_max=self.u_max,
+                 v_max=self.v_max,
+                 name=self.name,
+                 is_filter=self.is_filter,
+                 T=self.T,
+                 cutoff=self.cutoff,
+                 N=self.N)))
+
     def __init__(self,
+                 T,
+                 cutoff,
+                 N,
                  gains=[0, 0],
                  u_max=0,
                  v_max=0,
                  name=None,
-                 is_filter=[False, False, False],
-                 T=None,
-                 cutoff=None,
-                 N=None):
+                 is_filter=[False, False, False]):
         self.Kp = gains[0]
         self.Kd = gains[1]
         self.name = name
