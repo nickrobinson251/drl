@@ -703,10 +703,24 @@ class ValkyrieEnv(gym.Env):
                 continue
 
     def _setupCamera(self,
-                     cameraDistance=2.5,
-                     cameraYaw=0,
+                     cameraDistance=3,
+                     cameraYaw=45,
                      cameraPitch=0,
-                     cameraTargetPosition=[0, 0, 0.7]):
+                    cameraTargetPosition=[0, 0, 0.9]):
+        """Turn on camera at given position.
+
+        To be side-on and view sagittal balancing
+               cameraYaw=0, cameraTargetPositon=[0, 0, 0.9]
+        To be head-on and view lateral balancing
+               cameraYaw=90, cameraTargetPositon=[0.5, 0, 0.9]
+
+        Parameters
+        ----------
+        cameraDistance : int (default 3)
+        cameraYaw : int (default 45)
+        cameraPitch : int (default 0)
+        cameraTargetPositions : list (default 0, 0, 0.9)
+        """
         p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
         p.resetDebugVisualizerCamera(cameraDistance=cameraDistance,
                                      cameraYaw=cameraYaw,
