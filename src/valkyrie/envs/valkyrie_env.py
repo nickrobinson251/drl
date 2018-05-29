@@ -1,7 +1,6 @@
 import gym
 from gym import spaces
 from gym.utils import seeding
-import math
 import numpy as np
 import os
 import pybullet as p
@@ -305,10 +304,6 @@ class ValkyrieEnv(gym.Env):
                                             dtype=np.float32)
         self.action_space = spaces.Discrete(self.nu)
 
-    def __del__(self):
-        """Disconnect from physics simulator."""
-        self.disconnect()
-
     def disconnect(self):
         """Disconnect from physics simulator."""
         p.disconnect()
@@ -509,25 +504,25 @@ class ValkyrieEnv(gym.Env):
         left_foot_orn = p.getEulerFromQuaternion(left_foot_link_state[1])
         left_foot_roll_err = left_foot_orn[2]
 
-        x_pos_reward = math.exp(-19.51 * x_pos_err ** 2)
-        y_pos_reward = math.exp(-19.51 * y_pos_err ** 2)
-        z_pos_reward = math.exp(-113.84 * z_pos_err ** 2)  # -79.73
-        xy_pos_reward = math.exp(-19.51 * xy_pos_err ** 2)
+        x_pos_reward = np.exp(-19.51 * x_pos_err ** 2)
+        y_pos_reward = np.exp(-19.51 * y_pos_err ** 2)
+        z_pos_reward = np.exp(-113.84 * z_pos_err ** 2)  # -79.73
+        xy_pos_reward = np.exp(-19.51 * xy_pos_err ** 2)
 
-        x_vel_reward = math.exp(-0.57 * (x_vel_err) ** 2)
-        y_vel_reward = math.exp(-0.57 * (y_vel_err) ** 2)
-        z_vel_reward = math.exp(-3.69 * (z_vel_err) ** 2)  # -1.85
-        xy_vel_reward = math.exp(-0.57 * (xy_vel_err) ** 2)
+        x_vel_reward = np.exp(-0.57 * (x_vel_err) ** 2)
+        y_vel_reward = np.exp(-0.57 * (y_vel_err) ** 2)
+        z_vel_reward = np.exp(-3.69 * (z_vel_err) ** 2)  # -1.85
+        xy_vel_reward = np.exp(-0.57 * (xy_vel_err) ** 2)
 
-        torso_pitch_reward = math.exp(-4.68 * (torso_pitch_err) ** 2)
-        torso_roll_reward = math.exp(-4.68 * (torso_roll_err) ** 2)
-        pelvis_pitch_reward = math.exp(-4.68 * (pelvis_pitch_err) ** 2)
-        pelvis_roll_reward = math.exp(-4.68 * (pelvis_roll_err) ** 2)
+        torso_pitch_reward = np.exp(-4.68 * (torso_pitch_err) ** 2)
+        torso_roll_reward = np.exp(-4.68 * (torso_roll_err) ** 2)
+        pelvis_pitch_reward = np.exp(-4.68 * (pelvis_pitch_err) ** 2)
+        pelvis_roll_reward = np.exp(-4.68 * (pelvis_roll_err) ** 2)
 
-        right_foot_force_reward = math.exp(-2e-5 * (right_foot_force_err) ** 2)
-        right_foot_roll_reward = math.exp(-4.68 * (right_foot_roll_err) ** 2)
-        left_foot_force_reward = math.exp(-2e-5 * (left_foot_force_err) ** 2)
-        left_foot_roll_reward = math.exp(-4.68 * (left_foot_roll_err) ** 2)
+        right_foot_force_reward = np.exp(-2e-5 * (right_foot_force_err) ** 2)
+        right_foot_roll_reward = np.exp(-4.68 * (right_foot_roll_err) ** 2)
+        left_foot_force_reward = np.exp(-2e-5 * (left_foot_force_err) ** 2)
+        left_foot_roll_reward = np.exp(-4.68 * (left_foot_roll_err) ** 2)
 
         foot_contact_term = 0
         if not (self.checkGroundContact('right') or
@@ -1462,23 +1457,23 @@ class ValkyrieEnv(gym.Env):
         """Roll rotation matrix."""
         R = np.array([
             [1.0, 0.0, 0.0],
-            [0.0, math.cos(theta), -math.sin(theta)],
-            [0.0, math.sin(theta), math.cos(theta)]])
+            [0.0, np.cos(theta), -np.sin(theta)],
+            [0.0, np.sin(theta), np.cos(theta)]])
         return R
 
     def rotY(self, theta):
         """Pitch rotation matrix."""
         R = np.array([
-            [math.cos(theta), 0.0, math.sin(theta)],
+            [np.cos(theta), 0.0, np.sin(theta)],
             [0.0, 1.0, 0.0],
-            [-math.sin(theta), 0.0, math.cos(theta)]])
+            [-np.sin(theta), 0.0, np.cos(theta)]])
         return R
 
     def rotZ(self, theta):
         """Yaw rotation matrix."""
         R = np.array([
-            [math.cos(theta), -math.sin(theta), 0.0],
-            [math.sin(theta), math.cos(theta), 0.0],
+            [np.cos(theta), -np.sin(theta), 0.0],
+            [np.sin(theta), np.cos(theta), 0.0],
             [0.0, 0.0, 1.0]])
         return R
 
