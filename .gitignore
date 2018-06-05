@@ -1,5 +1,6 @@
-.idea
 .DS_Store
+.idea
+.ipynb_checkpoints
 .ropeproject
 __pycache__
 *.swp
