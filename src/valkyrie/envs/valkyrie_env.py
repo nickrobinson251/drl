@@ -361,7 +361,7 @@ class ValkyrieEnv(gym.Env):
         self._set_dynamics()
         self.reset_joint_states(base_pos, base_orn)
         self.set_zero_order_hold_nominal_pose()
-        self.get_link_mass()
+        self.calculate_link_masses()
 
         # TODO test joint reaction force torque
         p.enableJointForce_torqueSensor(
@@ -373,9 +373,9 @@ class ValkyrieEnv(gym.Env):
             for _ in range(int(self._actionRepeat)):
                 p.stepSimulation()
             # update information
-            self.get_link_COM_position()
-            self.get_link_COM_velocity()
-            self.get_COM_position()
+            self.calculate_link_COM_position()
+            self.calculate_link_COM_velocity()
+            self.calculate_COM_position()
             self.calculate_COM_velocity()
             self.calculate_pelvis_acc()  # TODO calculate pelvis acceleration
             self.calculate_COP()
@@ -428,9 +428,9 @@ class ValkyrieEnv(gym.Env):
         prev_torque_dict.update(torque_dict)
         self.hist_torque_target.update(prev_torque_dict)
         # update COM information
-        self.get_link_COM_position()
-        self.get_link_COM_velocity()
-        self.get_COM_position()
+        self.calculate_link_COM_position()
+        self.calculate_link_COM_velocity()
+        self.calculate_COM_position()
         self.calculate_COM_velocity()
         # TODO calculate pelvis acceleration
         self.calculate_pelvis_acc()
@@ -531,7 +531,7 @@ class ValkyrieEnv(gym.Env):
             foot_contact_term -= 1  # TODO increase penalty for losing contact
 
         fall_term = 0
-        if self.checkFall():
+        if self.is_fallen():
             fall_term -= 10
 
         reward = 10 * (2.0 * xy_pos_reward
@@ -744,9 +744,9 @@ class ValkyrieEnv(gym.Env):
         p.stopStateLogging(self.logId)
 
     def _termination(self):
-        """Same as self.checkFall. True if robot has fallen, else False.."""
-        # return (self._envStepCounter > self.max_steps) or (self.checkFall())
-        return self.checkFall()
+        """Same as self.is_fallen. True if robot has fallen, else False.."""
+        # return (self._envStepCounter > self.max_steps) or (self.is_fallen())
+        return self.is_fallen()
 
     def reset_joint_states(self, base_pos=None, base_orn=None):
         """Reset joints to default configuration, and base velocity to zero."""
@@ -1024,9 +1024,9 @@ class ValkyrieEnv(gym.Env):
         readings['rightGroundContact'] = self.is_ground_contact('right')
         readings['leftGroundContact'] = self.is_ground_contact('left')
         readings['rightGroundContactReactionForce'] = \
-            self.is_ground_contactReactionForce('right')
+            self.is_ground_contact_reacton_force('right')
         readings['leftGroundContactReactionForce'] = \
-            self.is_ground_contactReactionForce('left')
+            self.is_ground_contact_reacton_force('left')
         readings['rightGroundReactionForce'] = \
             self.joint_reaction_force('right')
         readings['leftGroundReactionForce'] = self.joint_reaction_force('left')
@@ -1051,8 +1051,8 @@ class ValkyrieEnv(gym.Env):
                                                computeLinkVelocity=0)
         readings['rightFootPitch'] = right_foot_link_state[1][1]
 
-        # right_COP,right_contact_force,_ = self.calculateFootCOP('right')
-        # left_COP,left_contact_force,_ = self.calculateFootCOP('left')
+        # right_COP,right_contact_force,_ = self.caclulate_foot_COP('right')
+        # left_COP,left_contact_force,_ = self.caclulate_foot_COP('left')
         (COP, contact_force, _, right_COP, right_contact_force, _, left_COP,
          left_contact_force, _) = self.COP_info
         readings['rightCOP'] = right_COP
@@ -1156,10 +1156,10 @@ class ValkyrieEnv(gym.Env):
         readings.update(reward_term)
         return readings
 
-    def get_COM_position(self):
+    def calculate_COM_position(self):
         """Get position of Centre of Mass."""
         summ = np.zeros(3)
-        for link, mass in self.linkMass.items():
+        for link, mass in self.link_masses.items():
             summ += np.array(self.link_ComPosition[link]) * mass
         summ /= self.total_mass
         self.COM_pos = summ  # update global COM position
@@ -1203,7 +1203,7 @@ class ValkyrieEnv(gym.Env):
             right_foot_bottom_centre[0][2], left_foot_bottom_centre[0][2])
         return self.COM_pos
 
-    def get_link_COM_velocity(self):
+    def calculate_link_COM_velocity(self):
         """Get centre of mass velocity for all links and base."""
         self.link_COM_velocity = {}
         base_pos_vel, base_orn_vel = p.getBaseVelocity(self.robot)
@@ -1227,7 +1227,7 @@ class ValkyrieEnv(gym.Env):
     #     V = dist / tau
     #     return V
 
-    def get_link_COM_position(self):
+    def calculate_link_COM_position(self):
         """Compute centre of mass position for all links and base."""
         self.link_ComPosition = {}
         base_pos, base_quat = p.getBasePositionAndOrientation(self.robot)
@@ -1249,17 +1249,17 @@ class ValkyrieEnv(gym.Env):
             self.link_ComPosition[joint] = info[0]
         return self.link_ComPosition
 
-    def get_link_mass(self):
+    def calculate_link_masses(self):
         """Compute link mass and total mass information."""
         info = p.getDynamicsInfo(self.robot, -1)  # for base link
-        self.linkMass = dict()
-        self.linkMass["pelvisBase"] = info[0]
+        self.link_masses = dict()
+        self.link_masses["pelvisBase"] = info[0]
         self.total_mass = info[0]
         for joint, idx in self.joint_idx.items():
             info = p.getDynamicsInfo(self.robot, idx)
-            self.linkMass[joint] = info[0]
+            self.link_masses[joint] = info[0]
             self.total_mass += info[0]
-        return self.linkMass
+        return self.link_masses
 
     def get_ground_contact_points(self):
         """Compute foot contact points with ground.
@@ -1526,7 +1526,7 @@ class ValkyrieEnv(gym.Env):
             self.robot, self.plane, self.joint_idx[side+'AnkleRoll'], -1)
         return len(ground_contact_points) > 0
 
-    def is_ground_contactReactionForce(self, side):
+    def is_ground_contact_reacton_force(self, side):
         """Return ground reaction force on given side.
         (NOTE: don't yet understand calculation used)
         Parameters
@@ -1541,7 +1541,7 @@ class ValkyrieEnv(gym.Env):
         # return 1/(1+np.exp(-(torque-9)))#sigmoid function
         return 1 / (1 + np.exp(-0.3 * (torque - 4)))
 
-    def checkFall(self):
+    def is_fallen(self):
         """Return True if robot has fallen, else False."""
         is_fallen = False
         base_pos, _ = p.getBasePositionAndOrientation(self.robot)
@@ -1573,7 +1573,7 @@ class ValkyrieEnv(gym.Env):
         #     is_fallen = True
         return is_fallen
 
-    def calculateFootCOP(self, side):
+    def caclulate_foot_COP(self, side):
         """Calculate Centre of Pressure for foot of chosen side.
 
         Parameters
@@ -1620,9 +1620,9 @@ class ValkyrieEnv(gym.Env):
         # contactForce = contactForce / len(footGroundContact)
         return pCOP, contactForce, True
 
-    def calculateFootCOP2(self, side):
+    def caclulate_foot_COP2(self, side):
         """Calculate Centre of Pressure for foot of chosen side.
-        (NOTE: don't understand difference to calculateFootCOP method)
+        (NOTE: don't understand difference to caclulate_foot_COP method)
 
         Parameters
         ----------
@@ -1745,7 +1745,7 @@ class ValkyrieEnv(gym.Env):
     def calculate_COM_velocity(self):
         """Calculate velocity of Centre of Mass."""
         summ = np.zeros((1, 3))
-        for link, mass in self.linkMass.items():
+        for link, mass in self.link_masses.items():
             summ += np.array(self.link_COM_velocity[link]) * mass
         summ /= self.total_mass
         self.COM_vel[0:3] = np.array(summ)
