@@ -383,7 +383,7 @@ class ValkyrieEnv(gym.Env):
             self.initialize_filtering()
             self.perform_filtering()
 
-        self.get_ground_contact_points()
+        self.calculate_ground_contact_points()
         self.get_support_polygon()  # hull of support polygon
         # record history of joint torque output for PD control
         self.action = dict()
@@ -435,7 +435,7 @@ class ValkyrieEnv(gym.Env):
         # TODO calculate pelvis acceleration
         self.calculate_pelvis_acc()
         self.calculate_COP()
-        self.get_ground_contact_points()
+        self.calculate_ground_contact_points()
         # perform filtering
         self.perform_filtering()
         self._observation = self.get_extended_observation()  # filtered
@@ -526,8 +526,7 @@ class ValkyrieEnv(gym.Env):
         left_foot_roll_reward = np.exp(-4.68 * (left_foot_roll_err) ** 2)
 
         foot_contact_term = 0
-        if not (self.is_ground_contact('right') or
-                self.is_ground_contact('left')):  # both feet lost contact
+        if not self.is_ground_contact():  # both feet lost contact
             foot_contact_term -= 1  # TODO increase penalty for losing contact
 
         fall_term = 0
@@ -1261,75 +1260,64 @@ class ValkyrieEnv(gym.Env):
             self.total_mass += info[0]
         return self.link_masses
 
-    def get_ground_contact_points(self):
+    def calculate_ground_contact_points(self):
         """Compute foot contact points with ground.
 
         Returns
         -------
-        contact_points : numpy.array
-        is_contact : bool (True is there are any ground contact points)
+        contact_points : numpy.array of length 3
         """
-        is_contact = False
         foot_ground_contact_info = []
         for side in ('right', 'left'):
             if self.is_ground_contact(side):
-                ankleRollContact = p.getContactPoints(
+                ankle_roll_contact = p.getContactPoints(
                     self.robot,
                     self.plane,
                     self.joint_idx[side+'AnkleRoll'],
                     -1)
-                anklePitchContact = p.getContactPoints(
+                ankle_pitch_contact = p.getContactPoints(
                     self.robot,
                     self.plane,
                     self.joint_idx[side+'AnklePitch'],
                     -1)
                 # use extend not append because getContactPoints returns a list
-                foot_ground_contact_info.extend(ankleRollContact)
-                foot_ground_contact_info.extend(anklePitchContact)
-
-        if len(foot_ground_contact_info) == 0:
-            self.contact_points = np.array([[0.0, 0.0, 0.0]])
-            return self.contact_points, is_contact
-        else:
-            is_contact = True
-            # get just x, y cartesian coordinates of contact position on robot
-            self.contact_points = np.array(
-                [info[5][0:2] for info in foot_ground_contact_info])
-        return self.contact_points, is_contact
+                foot_ground_contact_info.extend(ankle_roll_contact)
+                foot_ground_contact_info.extend(ankle_pitch_contact)
+        # get just x, y cartesian coordinates of contact position on robot
+        self.contact_points = np.array(
+            [info[5][0:2] for info in foot_ground_contact_info])
+        return self.contact_points
 
     def get_support_polygon(self):
-        footGroundContact = []
-        if self.is_ground_contact('right'):
-            ankleRollContact = p.getContactPoints(
-                self.robot, self.plane, self.joint_idx['rightAnkleRoll'], -1)
-            anklePitchContact = p.getContactPoints(
-                self.robot, self.plane, self.joint_idx['rightAnklePitch'], -1)
-            footGroundContact.extend(ankleRollContact)
-            footGroundContact.extend(anklePitchContact)
-        if self.is_ground_contact('left'):
-            ankleRollContact = p.getContactPoints(
-                self.robot, self.plane, self.joint_idx['leftAnkleRoll'], -1)
-            anklePitchContact = p.getContactPoints(
-                self.robot, self.plane, self.joint_idx['leftAnklePitch'], -1)
-            footGroundContact.extend(ankleRollContact)
-            footGroundContact.extend(anklePitchContact)
+        foot_ground_contact = []
+        for side in ('right', 'left'):
+            if self.is_ground_contact(side):
+                ankle_roll_contact = p.getContactPoints(
+                    self.robot,
+                    self.plane,
+                    self.joint_idx[side+'AnkleRoll'],
+                    -1)
+                ankle_pitch_contact = p.getContactPoints(
+                    self.robot,
+                    self.plane,
+                    self.joint_idx[side+'AnklePitch'],
+                    -1)
+                foot_ground_contact.extend(ankle_roll_contact)
+                foot_ground_contact.extend(ankle_pitch_contact)
+        foot_ground_contact_point = np.array(
+            [data[5] for data in foot_ground_contact])
 
-        footGroundContactPoint = np.array([data[5]
-                                           for data in footGroundContact])
-        # return a flag to indicate no contact point
-        if len(footGroundContactPoint) < 1:
-            return np.array([[0.0, 0.0, 0.0]]), False
+        if len(foot_ground_contact_point) < 1:
+            return np.array([[0.0, 0.0, 0.0]])
 
         # only use x and y coordinates
-        self.contact_points = footGroundContactPoint[:, 0:2]
+        self.contact_points = foot_ground_contact_point[:, 0:2]
         if len(self.contact_points) >= 4:
             hull = ConvexHull(self.contact_points)
             self.hull = self.contact_points[hull.vertices, :]
         else:
             self.hull = self.contact_points
-
-        # self.draw_support_polygon()
-        return self.hull, True
+        return self.hull
 
     def toggle_rendering(self):
         """Turn visualisation on/off."""
@@ -1513,18 +1501,23 @@ class ValkyrieEnv(gym.Env):
 
         return m
 
-    def is_ground_contact(self, side):
-        """True if robot is in contact with ground on given side, else False.
+    def is_ground_contact(self, side=None):
+        """True if robot is in contact with ground.
 
         Parameters
         ----------
-        side : str
-            Either 'left' or 'right'
+        side : str (optional)
+            Either 'left' or 'right', else checks both sides.
        """
         # TODO ground contact detection using contact point
-        ground_contact_points = p.getContactPoints(
-            self.robot, self.plane, self.joint_idx[side+'AnkleRoll'], -1)
-        return len(ground_contact_points) > 0
+        if side:
+            ground_contact_points = p.getContactPoints(
+                self.robot, self.plane, self.joint_idx[side+'AnkleRoll'], -1)
+            return len(ground_contact_points) > 0
+        else:
+            is_left_contact = self.is_ground_contact('left')
+            is_right_contact = self.is_ground_contact('right')
+            return is_left_contact or is_right_contact
 
     def is_ground_contact_reacton_force(self, side):
         """Return ground reaction force on given side.
@@ -1581,32 +1574,32 @@ class ValkyrieEnv(gym.Env):
         side : str
             Either 'left' or 'right'
         """
-        footGroundContact = []
+        foot_ground_contact = []
         # TODO ground contact detection using contact point
-        ankleRollContact = p.getContactPoints(
+        ankle_roll_contact = p.getContactPoints(
             self.robot, self.plane, self.joint_idx[side + 'AnkleRoll'], -1)
-        anklePitchContact = p.getContactPoints(
+        ankle_pitch_contact = p.getContactPoints(
             self.robot, self.plane, self.joint_idx[side + 'AnklePitch'], -1)
 
-        footGroundContact.extend(ankleRollContact)
-        footGroundContact.extend(anklePitchContact)
+        foot_ground_contact.extend(ankle_roll_contact)
+        foot_ground_contact.extend(ankle_pitch_contact)
         if not self.is_ground_contact(side):  # no contact
             return [
                 0.0, 0.0, 0.0], [
                 0.0, 0.0, 0.0], False  # COP does not exists
-        # print(len(ankleRollContact))
+        # print(len(ankle_roll_contact))
         pCOP = np.array([0, 0, 0])  # position of Center of pressure
         # force among the x,y,z axis of world frame
         contactForce = np.array([0, 0, 0])
-        # print(len(footGroundContact))
-        for i in range(len(footGroundContact)):
+        # print(len(foot_ground_contact))
+        for i in range(len(foot_ground_contact)):
             # contact normal of foot pointing towards plane
-            contactNormal = np.array(footGroundContact[i][7])
+            contactNormal = np.array(foot_ground_contact[i][7])
             # contact normal of plane pointing towards foot
             contactNormal = -contactNormal
-            contactNormalForce = np.array(footGroundContact[i][9])
+            contactNormalForce = np.array(foot_ground_contact[i][9])
             contactPosition = np.array(
-                footGroundContact[i][5])  # position on plane
+                foot_ground_contact[i][5])  # position on plane
             forceX = contactNormal[0] * contactNormalForce
             forceY = contactNormal[1] * contactNormalForce
             # force along the z axis is larger than zero
@@ -1617,7 +1610,7 @@ class ValkyrieEnv(gym.Env):
             pCOP = pCOP + contactPosition * forceZ
         pCOP = pCOP / contactForce[2]
         # pCOP[2] = 0.0  # z position is 0, on the plane
-        # contactForce = contactForce / len(footGroundContact)
+        # contactForce = contactForce / len(foot_ground_contact)
         return pCOP, contactForce, True
 
     def caclulate_foot_COP2(self, side):
@@ -1669,42 +1662,38 @@ class ValkyrieEnv(gym.Env):
         pCOP = np.array(link_frame_pos) + np.array([px, py, -d])
         # force among the x,y,z axis of world frame
         contactForce = np.array([Fx, Fy, Fz])
-        # print(len(footGroundContact))
+        # print(len(foot_ground_contact))
         return pCOP, contactForce, True
 
     def calculate_COP(self):
         """Calculate centre of pressure. (NOTE: don't understand this yet)"""
         # TODO ground contact detection using contact point
-        footGroundContact = []
-        ankleRollContact = p.getContactPoints(self.robot,
-                                              self.plane,
-                                              self.joint_idx['leftAnkleRoll'],
-                                              -1)
-        anklePitchContact = p.getContactPoints(self.robot,
-                                               self.plane,
-                                               self.joint_idx['leftAnklePitch'],
-                                               -1)
-        footGroundContact.extend(ankleRollContact)
-        footGroundContact.extend(anklePitchContact)
-        left_contact_info = footGroundContact
+        foot_ground_contact = []
+        ankle_roll_contact = p.getContactPoints(self.robot,
+                                                self.plane,
+                                                self.joint_idx['leftAnkleRoll'],
+                                                -1)
+        ankle_pitch_contact = p.getContactPoints(
+            self.robot, self.plane, self.joint_idx['leftAnklePitch'], -1)
+        foot_ground_contact.extend(ankle_roll_contact)
+        foot_ground_contact.extend(ankle_pitch_contact)
+        left_contact_info = foot_ground_contact
 
-        footGroundContact = []
-        ankleRollContact = p.getContactPoints(self.robot,
-                                              self.plane,
-                                              self.joint_idx['rightAnkleRoll'],
-                                              -1)
-        anklePitchContact = p.getContactPoints(
+        foot_ground_contact = []
+        ankle_roll_contact = p.getContactPoints(
+            self.robot, self.plane, self.joint_idx['rightAnkleRoll'], -1)
+        ankle_pitch_contact = p.getContactPoints(
             self.robot,
             self.plane,
             self.joint_idx['rightAnklePitch'],
             -1)
-        footGroundContact.extend(ankleRollContact)
-        footGroundContact.extend(anklePitchContact)
-        right_contact_info = footGroundContact
+        foot_ground_contact.extend(ankle_roll_contact)
+        foot_ground_contact.extend(ankle_pitch_contact)
+        right_contact_info = foot_ground_contact
 
         self.COP_info = self.COP_filter_method(right_contact_info,
                                                left_contact_info)  # right first
-        self.COP_info_filtered = self.COP_filter_method.get_filteredCOP()
+        self.COP_info_filtered = self.COP_filter_method.get_filtered_COP()
         return self.COP_info_filtered
 
     def calculate_pelvis_acc(self):
