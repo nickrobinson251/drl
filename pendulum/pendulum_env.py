@@ -5,8 +5,8 @@ import pybullet as p
 import pybullet_data
 
 
-class PendulumEnv(Env):
-    """Balancebot gym environment"""
+class InvertedPendulumEnv(Env):
+    """Inverted pendulum gym environment using pybullet"""
 
     metadata = {'render_modes': ['human']}
 
@@ -19,9 +19,9 @@ class PendulumEnv(Env):
         self.physics_client = p.connect(p.GUI)
         # make sure we can access URDF and MCJF files
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        self._seed()
+        self.seed()
 
-    def _reset(self):
+    def reset(self):
         """Reset environment and return observation.
 
         Automatically called at initialisation.
@@ -35,9 +35,9 @@ class PendulumEnv(Env):
         # start_orientation = p.getQuaternionFromEuler([0, 0, 0])
         self.plane_id = p.loadURDF("plane.urdf")
         self.pendulum_id = p.loadMJCF("mjcf/inverted_pendulum.xml")
-        return self._observe()
+        # return self._observe()
 
-    def _step(self, action):
+    def step(self, action):
         """Take an action.
 
         Returns
@@ -61,18 +61,18 @@ class PendulumEnv(Env):
         velocity_delta = deltas[action]
         self.target_velocity += velocity_delta
         # update angular velocity of wheels
-        p.setJointMotorControl2(bodyUniqueId=self.bot_id,
+        p.setJointMotorControl2(bodyUniqueId=self.pendulum_id,
                                 jointIndex=0,
                                 controlMode=p.VELOCITY_CONTROL,
                                 targetVelocity=self.target_velocity)
-        p.setJointMotorControl2(bodyUniqueId=self.bot_id,
+        p.setJointMotorControl2(bodyUniqueId=self.pendulum_id,
                                 jointIndex=1,
                                 controlMode=p.VELOCITY_CONTROL,
                                 targetVelocity=-self.target_velocity)
 
     def _observe(self):
         euler_x, _, _ = self._get_euler_angles()
-        pitch_velocity, angular_velocity = p.getBaseVelocity(self.bot_id)
+        pitch_velocity, angular_velocity = p.getBaseVelocity(self.pendulum_id)
         return np.array([euler_x, angular_velocity[0], self.target_velocity])
 
     def _compute_reward(self):
@@ -80,20 +80,20 @@ class PendulumEnv(Env):
         return (((1 - abs(euler_x)) / 10) - (abs(self.target_velocity / 100)))
 
     def _get_euler_angles(self):
-        _, orientation = p.getBasePositionAndOrientation(self.bot_id)
+        _, orientation = p.getBasePositionAndOrientation(self.pendulum_id)
         euler_angles = p.getEulerFromQuaternion(orientation)
         return euler_angles
 
     def _compute_done(self):
-        position, _ = p.getBasePositionAndOrientation(self.bot_id)
+        position, _ = p.getBasePositionAndOrientation(self.pendulum_id)
         com_below_15cm = position[2] < 0.15
-        at_step_limit = self.steps_taken >= 1500
-        return com_below_15cm or at_step_limit
+        atstep_limit = self.steps_taken >= 1500
+        return com_below_15cm or atstep_limit
 
-    def _seed(self, seed=None):
+    def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
-    def _render(self, mode='human', close=False):
+    def render(self, mode='human', close=False):
         """Does nothing because rendering is done by pybullet."""
         pass

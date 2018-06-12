@@ -10,7 +10,7 @@ def stop_condition(_locals, _globals):
 
 
 def main():
-    env = envs.PendulumEnv()
+    env = envs.InvertedPendulumEnv()
     mlp = deepq.models.mlp([16, 16])
     train = deepq.learn(env, q_func=mlp, lr=1e-3, max_timesteps=int(1e5),
                         buffer_size=15000, exploration_fraction=0.1,
