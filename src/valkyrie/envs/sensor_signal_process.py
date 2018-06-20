@@ -2,7 +2,7 @@ import numpy as np
 from valkyrie.envs.filter import FilterClass
 
 
-class calculateCOP():
+class calculate_COP():
     def __repr__(self):
         return str(self.__class__)
 
@@ -43,10 +43,10 @@ class calculateCOP():
 
     def __call__(self, right_contact_info, left_contact_info):
         """Calculate centre of pressure."""
-        leftFootCOP, leftF, leftFootCOPFlag = self.calculateFootCOP(
-                                                                    left_contact_info)
+        leftFootCOP, leftF, leftFootCOPFlag = self.calculate_foot_COP(
+            left_contact_info)
         self.left_COP_info = [leftFootCOP, leftF, leftFootCOPFlag]
-        rightFootCOP, rightF, rightFootCOPFlag = self.calculateFootCOP(
+        rightFootCOP, rightF, rightFootCOPFlag = self.calculate_foot_COP(
             right_contact_info)
         self.right_COP_info = [rightFootCOP, rightF, rightFootCOPFlag]
 
@@ -68,11 +68,11 @@ class calculateCOP():
             COPFlag = False
 
         self.COP_info = [COP, F, COPFlag]
-        self.performFiltering()
+        self.perform_filtering()
         return (COP, F, COPFlag, rightFootCOP, rightF, rightFootCOPFlag,
                 leftFootCOP, leftF, leftFootCOPFlag)
 
-    def calculateFootCOP(self, contact_info):
+    def calculate_foot_COP(self, contact_info):
         """Calculate position of foot Center Of Pressure (COP).
 
         Returns
@@ -99,7 +99,8 @@ class calculateCOP():
             F = F + F_contact
             # integration of contact point times vertical force
             COP = COP + contactPosition * F_contact[2]
-        COP = COP / F[2]
+        if F[2] != 0:
+            COP = COP / F[2]
 
         if F[2] < 10:  # threshold
             COP = np.array([0, 0, 0])
@@ -107,7 +108,7 @@ class calculateCOP():
 
         return COP, F, True
 
-    def performFiltering(self):
+    def perform_filtering(self):
         leftF = self.left_COP_info[1]
         rightF = self.right_COP_info[1]
         F = self.COP_info[1]
@@ -123,7 +124,7 @@ class calculateCOP():
             self.force_filter[i].applyFilter(F[i])
         return
 
-    def clearFilter(self):
+    def clear_filter(self):
         for i in range(3):
             self.left_foot_force_filter[i].clear_filter()
             self.right_foot_force_filter[i].clear_filter()
@@ -133,7 +134,7 @@ class calculateCOP():
             self.force_filter[i].clear_filter()
         return
 
-    def getFilteredCOP(self):
+    def get_filtered_COP(self):
         COP = np.array(
             [self.COP_filter[0].y[0],
              self.COP_filter[1].y[0],
