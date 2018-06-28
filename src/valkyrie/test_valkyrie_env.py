@@ -6,7 +6,7 @@ from valkyrie.envs.valkyrie_env import ValkyrieEnvBasic
 
 
 def test_imported_env():
-    env = ValkyrieEnvBasic(renders=False)
+    env = ValkyrieEnvBasic(render=False)
     time.sleep(3)
 
     env._setup_camera(cameraYaw=90, cameraTargetPosition=[0.5, 0, 0.9])
@@ -17,7 +17,7 @@ def test_imported_env():
     env.step(zeros(env.action_space.n))
     time.sleep(3)
 
-    pprint(env.get_reading())
+    # pprint(env.get_reading())
     print("[PASSED] {} works!".format(env.__class__))
 
 
@@ -34,7 +34,7 @@ def test_gym_make_env():
     env.step(zeros(env.action_space.n))
     time.sleep(3)
 
-    pprint(env.get_reading())
+    # pprint(env.get_reading())
     print("[PASSED] gym.make('{}') works!".format(env_name))
 
 
