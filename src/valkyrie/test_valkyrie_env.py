@@ -9,11 +9,11 @@ def test_imported_env():
     env = ValkyrieEnvBasic(render=False)
     time.sleep(3)
 
-    env._setup_camera(cameraYaw=90, cameraTargetPosition=[0.5, 0, 0.9])
+    env._setup_camera(yaw=90, target_position=[0.5, 0, 0.9])
     env.step(zeros(env.action_space.n))
     time.sleep(3)
 
-    env._setup_camera(cameraYaw=0, cameraTargetPosition=[0, 0, 0.9])
+    env._setup_camera(yaw=0, target_position=[0, 0, 0.9])
     env.step(zeros(env.action_space.n))
     time.sleep(3)
 
@@ -26,11 +26,11 @@ def test_gym_make_env():
     env = gym.make(env_name)
     time.sleep(3)
 
-    env._setup_camera(cameraYaw=90, cameraTargetPosition=[0.5, 0, 0.9])
+    env._setup_camera(yaw=90, target_position=[0.5, 0, 0.9])
     env.step(zeros(env.action_space.n))
     time.sleep(3)
 
-    env._setup_camera(cameraYaw=0, cameraTargetPosition=[0, 0, 0.9])
+    env._setup_camera(yaw=0, target_position=[0, 0, 0.9])
     env.step(zeros(env.action_space.n))
     time.sleep(3)
     env.close()

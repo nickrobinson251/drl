@@ -130,8 +130,6 @@ class ValkyrieEnv(gym.Env):
         self.uncontrolled_joints = np.array(
             [joint for joint in self.controllable_joints
              if joint not in self.controlled_joints])
-        self.nu = len(self.controlled_joints)
-        self.nq = len(self.controllable_joints)
         self.default_joint_config = {
             "leftAnklePitch": 0.0,  # -0.71
             "leftAnkleRoll": 0.0,
@@ -184,12 +182,12 @@ class ValkyrieEnv(gym.Env):
         self.pd_torque_adjusted = dict()
         self.pd_torque_filtered = dict()
         self.pd_torque_unfiltered = dict()
-        self.torque_applied_history = dict()
-        self.torque_target_history = dict()
+        self.last_torque_applied = dict()
+        self.last_torque_target = dict()
         for joint in self.controlled_joints:
             self.action[joint] = 0.0
-            self.torque_applied_history[joint] = 0.0
-            self.torque_target_history[joint] = 0.0
+            self.last_torque_applied[joint] = 0.0
+            self.last_torque_target[joint] = 0.0
         # Centre of mass. COM local coordinateisare wrt centre of mass of foot.
         # robot operates solely on the sagittal plane, the orientation of global
         # frame and local frame is aligned
@@ -279,7 +277,7 @@ class ValkyrieEnv(gym.Env):
         observation_high = np.array([MAXIMUM_FLOAT * self.num_states])
         self.observation_space = spaces.Box(-observation_high, observation_high,
                                             dtype=np.float32)
-        self.action_space = spaces.Discrete(self.nu)
+        self.action_space = spaces.Discrete(len(self.controlled_joints))
 
         ##########
         # Initialise pybullet simulation
@@ -373,61 +371,49 @@ class ValkyrieEnv(gym.Env):
         self.get_support_polygon()
         for joint in self.controlled_joints:
             joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            self.torque_applied_history[joint] = joint_state[3]
+            self.last_torque_applied[joint] = joint_state[3]
 
     def step(self, action, pelvis_push_force=[0, 0, 0]):
         """Take action, get observation, reward, done (bool), info (empty)."""
         torque_dict = self.calculate_PD_torque(action)
-        applied_torque_dict = torque_dict
-        prev_torque_dict = self.torque_target_history
         self.set_control(action)
         # higher frequency for physics simulation
         for i in range(self._action_repeats):
             # displacement from COM to the centre of the pelvis
-            p.applyExternalForce(self.robot_id,
-                                 -1,  # base
-                                 forceObj=pelvis_push_force,
-                                 posObj=[0, 0.0035, 0],
-                                 flags=p.LINK_FRAME)
+            p.applyExternalForce(
+                self.robot_id,
+                -1,  # base
+                forceObj=pelvis_push_force,
+                posObj=[0, 0.0035, 0],
+                flags=p.LINK_FRAME)
             for joint, torque in torque_dict.items():
-                applied_torque_dict[joint] = np.clip(
-                    2*torque - prev_torque_dict[joint],
-                    -self.u_max[joint], self.u_max[joint])
-                self.pd_torque_filtered[joint] = self.pd_controller[joint].u
+                self.pd_torque_filtered[joint] = self.pd_controller[joint].u_kal
                 self.pd_torque_unfiltered[joint] = \
                     self.pd_controller[joint].u_raw
-                self.pd_torque_adjusted[joint] = applied_torque_dict[joint]
-                # applied_torque_dict[joint] = self.pd_controller[joint].u_adj
-                # add momentum turn to reduce delay
-
+                self.pd_torque_adjusted[joint] = self.pd_controller[joint].u_adj
             self.set_control(action)
             self.set_PD_velocity_control(torque_dict)
-            # self.set_PD_velocity_control(applied_torque_dict)
-            # self.set_PD_position_control(applied_torque_dict, action)
-            # self.set_PD_torque_control(torque_dict)
             p.stepSimulation()  # one simulation step
 
-        prev_torque_dict.update(torque_dict)
-        self.torque_target_history.update(prev_torque_dict)
-        # update COM information
+        # update information
+        self.steps_taken += 1
         self.calculate_COM_position()
         self.calculate_COM_velocity()
         self.calculate_link_COM_position()
         self.calculate_link_COM_velocity()
-        # TODO calculate pelvis acceleration
         self.calculate_COP()
         self.calculate_ground_contact_points()
         self.calculate_pelvis_acc()
-        # perform filtering
-        self.perform_filtering()
-        self._observation = self.get_extended_observation()  # filtered
-        self.steps_taken += 1
-        reward, _ = self.reward()  # balancing
-        done = self.is_fallen()
 
+        self.perform_filtering()
+        self.last_torque_target.update(torque_dict)
         for joint in self.controlled_joints:  # TODO
             joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            self.torque_applied_history.update({joint: joint_state[3]})
+            self.last_torque_applied[joint] = joint_state[3]
+
+        self._observation = self.get_extended_observation()  # filtered
+        reward, _ = self.reward()  # balancing
+        done = self.is_fallen()
         return self._observation, reward, done, {}
 
     def reward(self):
@@ -507,31 +493,32 @@ class ValkyrieEnv(gym.Env):
 
     def _setup_camera(
             self,
-            cameraDistance=3,
-            cameraYaw=45,
-            cameraPitch=0,
-            cameraTargetPosition=[0, 0, 0.9]):
+            distance=3,
+            yaw=45,
+            pitch=0,
+            target_position=[0, 0, 0.9]):
         """Turn on camera at given position.
 
         Wraps pybullet.resetDebugVisualizerCamera
 
         To be side-on and view sagittal balancing
-               cameraYaw=0, cameraTargetPosition=[0, 0, 0.9]
+               yaw=0, target_position=[0, 0, 0.9]
         To be head-on and view lateral balancing
-               cameraYaw=90, cameraTargetPosition=[0.5, 0, 0.9]
+               yaw=90, target_position=[0.5, 0, 0.9]
 
         Parameters
         ----------
-        cameraDistance : int (default 3)
-        cameraYaw : int (default 45)
-        cameraPitch : int (default 0)
-        cameraTargetPositions : list (default 0, 0, 0.9)
+        distance : int (default 3)
+        yaw : int (default 45)
+        pitch : int (default 0)
+        target_position : list (default 0, 0, 0.9)
         """
         p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
-        p.resetDebugVisualizerCamera(cameraDistance=cameraDistance,
-                                     cameraYaw=cameraYaw,
-                                     cameraPitch=cameraPitch,
-                                     cameraTargetPosition=cameraTargetPosition)
+        p.resetDebugVisualizerCamera(
+            cameraDistance=distance,
+            cameraYaw=yaw,
+            cameraPitch=pitch,
+            cameraTargetPosition=target_position)
 
     def _setup_joint_mapping(self):
         """Store joint name-to-index mapping."""
@@ -545,21 +532,24 @@ class ValkyrieEnv(gym.Env):
             self.joint_idx2name[joint_index] = joint_name
 
     def render(self, mode='human', close=False):
-        p.addUserDebugLine(self.COM_pos + np.array([0, 0, 2]),
-                           self.COM_pos + np.array([0, 0, -2]),
-                           [1, 0, 0],
-                           5,
-                           0.1)  # TODO rendering to draw COM
-        p.addUserDebugLine(self.support_polygon_centre[0]+np.array([0, 0, 2]),
-                           self.support_polygon_centre[0]+np.array([0, 0, -2]),
-                           [0, 1, 0],
-                           5,
-                           0.1)  # TODO rendering to draw support polygon
-        p.addUserDebugLine(self.support_polygon_centre[0]+np.array([2, 0, 0]),
-                           self.support_polygon_centre[0]+np.array([-2, 0, 0]),
-                           [0, 1, 0],
-                           5,
-                           0.1)  # TODO rendering to draw support polygon
+        p.addUserDebugLine(
+            self.COM_pos + np.array([0, 0, 2]),
+            self.COM_pos + np.array([0, 0, -2]),
+            [1, 0, 0],
+            5,
+            0.1)  # TODO rendering to draw COM
+        p.addUserDebugLine(
+            self.support_polygon_centre[0]+np.array([0, 0, 2]),
+            self.support_polygon_centre[0]+np.array([0, 0, -2]),
+            [0, 1, 0],
+            5,
+            0.1)  # TODO rendering to draw support polygon
+        p.addUserDebugLine(
+            self.support_polygon_centre[0]+np.array([2, 0, 0]),
+            self.support_polygon_centre[0]+np.array([-2, 0, 0]),
+            [0, 1, 0],
+            5,
+            0.1)  # TODO rendering to draw support polygon
 
     def start_logging_video(self):
         """Begin saving MP4 video of simulation state."""
@@ -586,10 +576,11 @@ class ValkyrieEnv(gym.Env):
         p.resetBasePositionAndOrientation(self.robot_id, base_pos, base_orn)
         p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
         for joint in self.default_joint_config:
-            p.resetJointState(self.robot_id,
-                              self.joint_idx[joint],
-                              targetValue=self.default_joint_config[joint],
-                              targetVelocity=0)
+            p.resetJointState(
+                self.robot_id,
+                self.joint_idx[joint],
+                targetValue=self.default_joint_config[joint],
+                targetVelocity=0)
 
     def initialise_filtering(self):
         """Initialise filters for states, PD controller, and COM position."""
@@ -908,22 +899,17 @@ class ValkyrieEnv(gym.Env):
         # record joint torque calculated by self defined PD controller
         for joint in self.controlled_joints:
             if joint in self.Kp:  # if PD gains are defined
-                position = self.pd_controller[joint].filtered_position
-                velocity = self.pd_controller[joint].filtered_velocity
-                # torque = self.pd_controller[joint].control(self.action[joint],
-                # 0)
-                torque = self.pd_controller[joint].u
-                P_torque = self.pd_controller[joint].u_e
-                D_torque = self.pd_controller[joint].u_de
-                readings[joint+'PDPosition'] = position
-                readings[joint+'PDVelocity'] = velocity
+                readings[joint+'PDPosition'] = \
+                    self.pd_controller[joint].filtered_position
+                readings[joint+'PDVelocity'] = \
+                    self.pd_controller[joint].filtered_velocit
                 readings[joint+'PDPositionAdjusted'] = \
                     self.pd_controller[joint].adjusted_position
                 readings[joint+'PDVelocityAdjusted'] = \
                     self.pd_controller[joint].adjusted_velocity
-                readings[joint+'PD_torque'] = torque
-                readings[joint+'PD_torque_Kp'] = P_torque
-                readings[joint+'PD_torque_Kd'] = D_torque
+                readings[joint+'PD_torque'] = self.pd_controller[joint].u_kal
+                readings[joint+'PD_torque_Kp'] = self.pd_controller[joint].u_e
+                readings[joint+'PD_torque_Kd'] = self.pd_controller[joint].u_de
                 readings[joint+'PDPositionKalman'] = \
                     self.pd_controller[joint].kalman_filtered_position
                 readings[joint+'PDVelocityKalman'] = \
@@ -931,7 +917,7 @@ class ValkyrieEnv(gym.Env):
                 readings[joint+'PD_torqueWithAdjustedFeedback'] = \
                     self.pd_controller[joint].u_adj
                 readings[joint+'PDFiltered_torque'] = \
-                    self.pd_controller[joint].u
+                    self.pd_controller[joint].u_kal
                 readings[joint+'PDUnfiltered_torque'] = \
                     self.pd_controller[joint].u_raw
                 if len(self.pd_torque_adjusted) > 0:  # non-empty if step taken
@@ -1535,7 +1521,6 @@ class ValkyrieEnv(gym.Env):
         """Calculate pelvis acceleration. (NOTE: don't understand this yet)"""
         # TODO add pelvis acceleration
         base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
-        # base_orn = p.getEulerFromQuaternion(base_quat)
         R = self.transform(base_quat)
         R_i = np.linalg.inv(R)
         pelvis_vel, _ = p.getBaseVelocity(self.robot_id)
@@ -1549,7 +1534,6 @@ class ValkyrieEnv(gym.Env):
         self.pelvis_vel_history_array[len(
             self.pelvis_vel_history_array) - 1, :] = np.array(pelvis_vel)
         x = self.pelvis_vel_history_array[:, 0]
-        # print(x)
         y = self.pelvis_vel_history_array[:, 1]
 
         z = self.pelvis_vel_history_array[:, 2]
@@ -1577,11 +1561,9 @@ class ValkyrieEnv(gym.Env):
     def calculate_PD_torque(self, u):
         """Calculate torque using self desinged PD controller.
 
-        NOTE: this method updates self.action
-
         Parameters
         ----------
-        u : list of length self.nu
+        u : list of same length as self.controlled_joints
             target position for controlled joint 0, 1, ..., nu
 
         Returns
@@ -1591,15 +1573,10 @@ class ValkyrieEnv(gym.Env):
         """
         # Set control. pd_controller call will fail if any element of u is NaN
         torques = dict()
-        for i in range(self.nu):
-            joint = self.controlled_joints[i]
-            self.action.update({joint: u[i]})  # TODO
+        for i, joint in enumerate(self.controlled_joints):
             if joint in self.Kp:  # PD gains defined for joint
                 torque = self.pd_controller[joint].control(u[i], 0.0)
-                # torque = u[i]
-                torque = np.clip(
-                    torque, -self.u_max[joint],
-                    self.u_max[joint])
+                torque = np.clip(torque, -self.u_max[joint], self.u_max[joint])
                 torques[joint] = torque
         return torques
 
@@ -1636,13 +1613,11 @@ class ValkyrieEnv(gym.Env):
         Also updates `action` attribute.
         """
         final = np.isnan(u).any()
-        # Set control
-        for i in range(self.nu):
-            joint = self.controlled_joints[i]
-            self.action.update({joint: u[i]})  # TODO
+        for i, joint in enumerate(self.controlled_joints):
             if not final:
                 p.setJointMotorControl2(
-                    self.robot_id, self.joint_idx[joint],
+                    self.robot_id,
+                    self.joint_idx[joint],
                     targetPosition=u[i],
                     targetVelocity=0,
                     maxVelocity=self.v_max[joint],
@@ -1655,12 +1630,18 @@ class ValkyrieEnv(gym.Env):
     def set_PD_velocity_control(self, torque_dict):
         """Set the maximum motor force limit for joints.
 
-        When a step is taken, force is applied to reach target velocity,
-        where target velocity = self.v_max * sign(max_torque).
+        We are using this as a form of _torque_ control, where the target
+        velocity is _always_ set to be the maximum velocity allowed, and we
+        input the maximum torque that we want to apply to reach that velocity.
+
+        When a step is taken, force (up to the limit we input) is applied to
+        reach the target velocity, where
+            target velocity = self.v_max * sign(torque).
 
         Parameters
         ----------
-        torque_dict : dict of {joint_name: max_torque}
+        torque_dict : dict of {str: float}
+            joint names and the maximum torque to allow upon taking a step
         """
         for joint, torque in torque_dict.items():
             p.setJointMotorControl2(
@@ -1675,9 +1656,13 @@ class ValkyrieEnv(gym.Env):
     def set_PD_torque_control(self, torque_dict):
         """Set exact motor force that will be applied to joints when step taken.
 
+        We do not usually use this because torque control in pybullet does not
+        allow us to specify a velocity limit.
+
         Parameters
         ----------
-        torque_dict : dict of {joint_name: torque}
+        torque_dict : dict of {str: float}
+            joint names and the torque to allow upon taking a step
         """
         for joint, torque in torque_dict.items():
             p.setJointMotorControl2(
@@ -1698,53 +1683,52 @@ class ValkyrieEnv(gym.Env):
         """Set desired control for each joint, to be run when a step taken.
 
         During the `step` the physics engine will simulate the joint motors to
-        reach the given target value,  within the maximum motor forces and other
+        reach the given target value, within the maximum motor forces and other
         constraints.
 
         Parameters
         ----------
-        u : list of length self.nu
-            target position for controlled joint 0, 1, ..., nu
+        u : list of same length as self.controlled_joints
+            target position for controlled joint 0, 1, ...
         """
-        # final = np.isnan(u).any()
-        # Set control
-        for i in range(self.nu):
-            joint = self.controlled_joints[i]
+        for i, joint in enumerate(self.controlled_joints):
             self.action.update({joint: u[i]})  # TODO
             if self.use_bullet_default_pd:
-                p.setJointMotorControl2(self.robot_id,
-                                        self.joint_idx[joint],
-                                        targetPosition=u[i],
-                                        targetVelocity=0,
-                                        maxVelocity=self.v_max[joint],
-                                        force=self.u_max[joint],
-                                        positionGain=self.Kp[joint],
-                                        velocityGain=self.Kd[joint],
-                                        controlMode=p.POSITION_CONTROL)
+                p.setJointMotorControl2(
+                    self.robot_id,
+                    self.joint_idx[joint],
+                    targetPosition=u[i],
+                    targetVelocity=0,
+                    maxVelocity=self.v_max[joint],
+                    force=self.u_max[joint],
+                    positionGain=self.Kp[joint],
+                    velocityGain=self.Kd[joint],
+                    controlMode=p.POSITION_CONTROL)
 
             else:  # using own PD controller
                 if joint in self.Kp:  # PD gains defined
                     torque = self.pd_controller[joint].control(u[i], 0)
-                    torque = np.clip(torque,
-                                     -self.u_max[joint],
-                                     self.u_max[joint])
-                    p.setJointMotorControl2(self.robot_id,
-                                            self.joint_idx[joint],
-                                            targetVelocity=(
-                                                np.sign(torque)
-                                                * self.v_max[joint]),
-                                            force=np.abs(torque),
-                                            # force=0,  # disable motor
-                                            velocityGains=0.0001,
-                                            controlMode=p.VELOCITY_CONTROL)
+                    torque = np.clip(
+                        torque,
+                        -self.u_max[joint],
+                        self.u_max[joint])
+                    p.setJointMotorControl2(
+                        self.robot_id,
+                        self.joint_idx[joint],
+                        targetVelocity=(
+                            np.sign(torque) * self.v_max[joint]),
+                        force=np.abs(torque),
+                        velocityGains=0.0001,
+                        controlMode=p.VELOCITY_CONTROL)
                 else:  # PD gains not defined
-                    p.setJointMotorControl2(self.robot_id,
-                                            self.joint_idx[joint],
-                                            targetPosition=u[i],
-                                            targetVelocity=0,
-                                            maxVelocity=self.v_max[joint],
-                                            force=self.u_max[joint],
-                                            controlMode=p.POSITION_CONTROL)
+                    p.setJointMotorControl2(
+                        self.robot_id,
+                        self.joint_idx[joint],
+                        targetPosition=u[i],
+                        targetVelocity=0,
+                        maxVelocity=self.v_max[joint],
+                        force=self.u_max[joint],
+                        controlMode=p.POSITION_CONTROL)
 
         # Set zero order hold for uncontrolled joints
         for joint in self.uncontrolled_joints:
@@ -1779,11 +1763,7 @@ class ValkyrieEnv(gym.Env):
         # otherwise can apply local transformation
         _, base_quat = p.getBasePositionAndOrientation(self.robot_id)
         base_pos = self.link_COM_position['pelvisBase']
-
-        # Rz = self.rotZ(base_orn[2])
-        # Rz_i = np.linalg.inv(Rz)
         R = self.transform(base_quat)
-        # R_i = np.linalg.inv(R)
 
         x_axis = np.array([[0.8, 0, 0]])
         y_axis = np.array([[0, 0.8, 0]])
@@ -1793,21 +1773,24 @@ class ValkyrieEnv(gym.Env):
         y_axis_base = np.transpose(R @ y_axis.transpose())
         z_axis_base = np.transpose(R @ z_axis.transpose())
 
-        p.addUserDebugLine(np.array(base_pos),
-                           np.array(base_pos) + x_axis_base[0],
-                           [1, 0, 0],
-                           5,
-                           0.1)  # x axis
-        p.addUserDebugLine(np.array(base_pos),
-                           np.array(base_pos) + y_axis_base[0],
-                           [0, 1, 0],
-                           5,
-                           0.1)  # y axis
-        p.addUserDebugLine(np.array(base_pos),
-                           np.array(base_pos) + z_axis_base[0],
-                           [0, 0, 1],
-                           5,
-                           0.1)  # z axis
+        p.addUserDebugLine(  # x axis
+            np.array(base_pos),
+            np.array(base_pos) + x_axis_base[0],
+            [1, 0, 0],
+            5,
+            0.1)
+        p.addUserDebugLine(   # y axis
+            np.array(base_pos),
+            np.array(base_pos) + y_axis_base[0],
+            [0, 1, 0],
+            5,
+            0.1)
+        p.addUserDebugLine(  # z axis
+            np.array(base_pos),
+            np.array(base_pos) + z_axis_base[0],
+            [0, 0, 1],
+            5,
+            0.1)
 
     def draw_base_yaw_frame(self):
         """Draw approximate yaw frame."""
@@ -1815,11 +1798,7 @@ class ValkyrieEnv(gym.Env):
         # otherwise can apply local transformation
         _, base_quat = p.getBasePositionAndOrientation(self.robot_id)
         base_orn = p.getEulerFromQuaternion(base_quat)
-
         Rz = self.rotZ(base_orn[2])
-        # Rz_i = np.linalg.inv(Rz)
-        # R = self.transform(base_quat)
-        # R_i = np.linalg.inv(R)
 
         x_axis = np.array([[1.5, 0, 0]])
         y_axis = np.array([[0, 1.5, 0]])
@@ -1830,24 +1809,24 @@ class ValkyrieEnv(gym.Env):
         z_axis_base = np.transpose(Rz @ z_axis.transpose())
 
         origin = np.array([0.5, 0, 0.3])
-
-        p.addUserDebugLine(np.array(origin),
-                           np.array(origin) + x_axis_base[0],
-                           [1, 0, 0],
-                           5,
-                           0.1)  # x axis
-        p.addUserDebugLine(np.array(origin),
-                           np.array(origin) + y_axis_base[0],
-                           [0, 1, 0],
-                           5,
-                           0.1)  # y axis
-        p.addUserDebugLine(np.array(origin),
-                           np.array(origin) + z_axis_base[0],
-                           [0, 0, 1],
-                           5,
-                           0.1)  # z axis
-
-        return
+        p.addUserDebugLine(
+            np.array(origin),
+            np.array(origin) + x_axis_base[0],
+            [1, 0, 0],
+            5,
+            0.1)
+        p.addUserDebugLine(
+            np.array(origin),
+            np.array(origin) + y_axis_base[0],
+            [0, 1, 0],
+            5,
+            0.1)
+        p.addUserDebugLine(
+            np.array(origin),
+            np.array(origin) + z_axis_base[0],
+            [0, 0, 1],
+            5,
+            0.1)
 
     def draw_skeleton_yaw(self):
         # This may not be the Pelvis CoM position _exactly_ but should be fine,
@@ -2324,7 +2303,7 @@ class ValkyrieEnvBasic(ValkyrieEnv):
         torque_change_penalty = 0
         for joint in self.controlled_joints:
             joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            torque_change = self.torque_applied_history[joint] - joint_state[3]
+            torque_change = self.last_torque_applied[joint] - joint_state[3]
             torque_change_penalty -= abs(torque_change / self.u_max[joint])
 
         # reward += 2 * velocity_penalty

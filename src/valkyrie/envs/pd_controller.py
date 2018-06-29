@@ -65,20 +65,20 @@ class PDController:
         self.kalman_position_filter = KalmanFilter(1e-6, 1e-4, 0.0, 0.0)
         self.kalman_velocity_filter = KalmanFilter(1e-5, 1e-3, 0.0, 0.0)
         # initialise measuremnt values to zero
-        self.measured_position = 0.0
-        self.measured_velocity = 0.0
-        self.filtered_position = 0.0
-        self.filtered_velocity = 0.0
         self.adjusted_position = 0.0
         self.adjusted_velocity = 0.0
-        self.kalman_filtered_velocity = 0.0
+        self.filtered_position = 0.0
+        self.filtered_velocity = 0.0
         self.kalman_filtered_position = 0.0
-        self.u = 0.0  # torque
-        self.u_e = 0.0
-        self.u_de = 0.0
-        self.u_raw = 0.0
+        self.kalman_filtered_velocity = 0.0
+        self.measured_position = 0.0
+        self.measured_velocity = 0.0
+        # torque
         self.u_adj = 0.0
+        self.u_de = 0.0
+        self.u_e = 0.0
         self.u_kal = 0.0
+        self.u_raw = 0.0
 
     def _calculate_torque(self, target_position, target_velocity, method):
         """Compute torque using measured and target position and velocity.
@@ -88,22 +88,24 @@ class PDController:
         method : str ("raw", "adjusted", "filtered")
             method used to meaure current position and velocity
         """
-        use_torque_filter = self.is_filter[2]
         if method == "adjusted":
             current_position = self.adjusted_position
             current_velocity = self.adjusted_velocity
         elif method == "filtered":
             current_position = self.kalman_filtered_position
             current_velocity = self.kalman_filtered_position
-        else:
+        elif "raw":
             current_position = self.measured_position
             current_velocity = self.measured_velocity
+        else:
+            raise ValueError("Method must be 'raw', 'adjusted' or 'filtered'."
+                             "Got {}.".format(method))
         e = float(target_position - current_position)
         de = float(target_velocity - current_velocity)
         self.u_e = self.Kp * e
         self.u_de = self.Kd * de
         torque = self.u_e + self.u_de
-        if use_torque_filter:
+        if self.is_filter[2]:  # if use_torque_filter is True
             torque = self.torque_filter(torque)
         torque = np.clip(torque, -self.u_max, self.u_max)
         return torque
