@@ -33,6 +33,7 @@ def test_gym_make_env():
     env._setup_camera(cameraYaw=0, cameraTargetPosition=[0, 0, 0.9])
     env.step(zeros(env.action_space.n))
     time.sleep(3)
+    env.close()
 
     # pprint(env.get_reading())
     print("[PASSED] gym.make('{}') works!".format(env_name))
@@ -41,9 +42,12 @@ def test_gym_make_env():
 def main():
     try:
         test_gym_make_env()
+    except Exception as e:
+        print("[FAILED] on gym.make : ", e)
+    try:
         test_imported_env()
     except Exception as e:
-        print("[FAILED] ", e)
+        print("[FAILED] on imported env : ", e)
 
 
 if __name__ == '__main__':

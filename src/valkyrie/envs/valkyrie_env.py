@@ -8,7 +8,7 @@ from scipy.spatial import ConvexHull
 
 from valkyrie.envs.filter import ButterworthFilter
 from valkyrie.envs.pd_controller import PDController
-from valkyrie.envs.calculate_cop import CalculateCOP
+from valkyrie.envs.cop_calculator import COPCalculator
 
 
 CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -190,6 +190,23 @@ class ValkyrieEnv(gym.Env):
             self.action[joint] = 0.0
             self.torque_applied_history[joint] = 0.0
             self.torque_target_history[joint] = 0.0
+        # Centre of mass. COM local coordinateisare wrt centre of mass of foot.
+        # robot operates solely on the sagittal plane, the orientation of global
+        # frame and local frame is aligned
+        self.COM_pos = np.zeros(3)  # global COM
+        self.COM_vel = np.zeros(3)
+        self.COM_pos_local = np.zeros(3)  # local COM
+        self.COM_pos_local_filtered = np.zeros(3)
+        self.COM_pos_local_surrogate = np.zeros(3)
+        self.support_polygon_centre = np.zeros(3)
+        self.support_polygon_centre_surrogate = np.zeros(3)
+        # Pelvis acceleration
+        self.pelvis_acc_gap_step = 10
+        self.pelvis_acc = np.zeros(3)
+        self.pelvis_acc_base = np.zeros(3)
+        self.pelvis_vel_history_array = np.zeros((self.pelvis_acc_gap_step, 3))
+        self.pelvis_vel_history = np.zeros(3)
+        self.pelvis_vel_history_base = np.zeros(3)
 
         ##########
         # set torque limits
@@ -254,43 +271,25 @@ class ValkyrieEnv(gym.Env):
             "torsoRoll": 9,
             "torsoYaw": 5.89,
             "upperNeckPitch": 5}
-        ##########
-        # Centre of mass. COM local coordinateisare wrt centre of mass of foot.
-        # robot operates solely on the sagittal plane, the orientation of global
-        # frame and local frame is aligned
-        self.COM_pos = np.zeros(3)  # global COM
-        self.COM_vel = np.zeros(3)
-        self.COM_pos_local = np.zeros(3)  # local COM
-        self.COM_pos_local_filter = np.zeros(3)
-        self.COM_pos_local_surrogate = np.zeros(3)
-        self.support_polygon_centre = np.zeros(3)
-        self.support_polygon_centre_surrogate = np.zeros(3)
-        # Pelvis acceleration
-        self.pelvis_acc_gap_step = 10
-        self.pelvis_acc = np.zeros(3)
-        self.pelvis_acc_base = np.zeros(3)
-        self.pelvis_vel_history_array = np.zeros((self.pelvis_acc_gap_step, 3))
-        self.pelvis_vel_history = np.zeros(3)
-        self.pelvis_vel_history_base = np.zeros(3)
-
-        ##########
-        # Initialise pybullet simulation
-        self._render = render
-        if self._render:
-            p.connect(p.GUI)
-        else:
-            p.connect(p.DIRECT)
-        self.num_states = 51
-        self._setup_simulation(self.default_base_pos, self.default_base_orn)
-        self.steps_taken = 0
 
         ##########
         # Define observation and action spaces
+        self.num_states = 51
         MAXIMUM_FLOAT = np.finfo(np.float32).max
         observation_high = np.array([MAXIMUM_FLOAT * self.num_states])
         self.observation_space = spaces.Box(-observation_high, observation_high,
                                             dtype=np.float32)
         self.action_space = spaces.Discrete(self.nu)
+
+        ##########
+        # Initialise pybullet simulation
+        self.steps_taken = 0
+        self._render = render
+        if self._render:
+            p.connect(p.GUI)
+        else:
+            p.connect(p.DIRECT)
+        self._setup_simulation(self.default_base_pos, self.default_base_orn)
 
     def disconnect(self):
         """Disconnect from physics simulator."""
@@ -473,20 +472,20 @@ class ValkyrieEnv(gym.Env):
 
     def _setup_filter(self):
         # TODO test calculation and filtering for COP
-        self.COP_filter_method = CalculateCOP(10, 10, self._dt_filter, 1)
+        self.COP_filter = COPCalculator(10, 10, self._dt_filter, 1)
 
         # filtering states
         # TODO test filtering for state and reward
-        self.state_filter_method = {}
+        self.state_filter = {}
         for i in range(self.num_states):
             # TODO experiment with different cutoff frequencies
-            self.state_filter_method[i] = ButterworthFilter(
+            self.state_filter[i] = ButterworthFilter(
                 sample_period=self._dt_filter,
                 cutoff=10,
                 filter_order=1)
-        self.COM_pos_local_filter_method = {}
+        self.COM_pos_local_filter = {}
         for i in range(3):
-            self.COM_pos_local_filter_method[i] = ButterworthFilter(
+            self.COM_pos_local_filter[i] = ButterworthFilter(
                 sample_period=self._dt_filter,
                 cutoff=10,
                 filter_order=1)
@@ -596,7 +595,7 @@ class ValkyrieEnv(gym.Env):
         """Initialise filters for states, PD controller, and COM position."""
         observation = self.get_observation()
         for i in range(self.num_states):
-            self.state_filter_method[i].initialise_xy(observation[i])
+            self.state_filter[i].initialise_xy(observation[i])
         # TODO filtering for PD controller
         for j in self.controlled_joints:
             position, velocity, _, torque = p.getJointState(self.robot_id,
@@ -605,19 +604,17 @@ class ValkyrieEnv(gym.Env):
                 self.pd_controller[j].reset(position, velocity, torque)
         # Initialise filtering for COM position
         for i in range(3):
-            self.COM_pos_local_filter_method[i].initialise_xy(
-                self.COM_pos_local[i])
-            self.COM_pos_local_filter[i] = \
-                self.COM_pos_local_filter_method[i].y[0]
+            self.COM_pos_local_filter[i].initialise_xy(self.COM_pos_local[i])
+            self.COM_pos_local_filtered[i] = self.COM_pos_local_filter[i].y[0]
 
     def perform_filtering(self):  # TODO test filtering
         """Apply filtering of states, PD controller, and COM position."""
         observation = self.get_observation()
         for i in range(self.num_states):
-            self.state_filter_method[i](observation[i])
+            self.state_filter[i](observation[i])
         # Binay state filter
-        # self.left_contact_filter_method(observation[39])
-        # self.right_contact_filter_method(observation[59])
+        # self.left_contact_filter(observation[39])
+        # self.right_contact_filter(observation[59])
 
         # TODO filtering for PD controller
         for j in self.controlled_joints:
@@ -627,10 +624,8 @@ class ValkyrieEnv(gym.Env):
                 self.pd_controller[j].update_measurements(position, velocity)
         # perform filtering of COM position
         for i in range(3):
-            self.COM_pos_local_filter_method[i](
-                self.COM_pos_local[i])
-            self.COM_pos_local_filter[i] = \
-                self.COM_pos_local_filter_method[i].y[0]
+            self.COM_pos_local_filter[i](self.COM_pos_local[i])
+            self.COM_pos_local_filtered[i] = self.COM_pos_local_filter[i].y[0]
 
     def get_observation(self):
         x_observation = np.zeros((self.num_states,))
@@ -840,12 +835,12 @@ class ValkyrieEnv(gym.Env):
         observation = self.get_observation()
         observation_filtered = np.zeros(np.size(observation))
         for i in range(self.num_states):
-            observation_filtered[i] = self.state_filter_method[i].y[0]
+            observation_filtered[i] = self.state_filter[i].y[0]
         # TODO binary values should not be filtered.
         # observation_filtered[48] = observation[48]
         # observation_filtered[49] = observation[49]
-        # observation_filtered[39]=self.left_contact_filter_method.y
-        # observation_filtered[59]=self.right_contact_filter_method.y
+        # observation_filtered[39]=self.left_contact_filter.y
+        # observation_filtered[59]=self.right_contact_filter.y
         return observation_filtered
 
     def get_reading(self):
@@ -904,7 +899,8 @@ class ValkyrieEnv(gym.Env):
         readings['COM_vel'] = np.array(self.COM_vel)
         readings['COM_pos'] = np.array(self.COM_pos)
         readings['COM_pos_local'] = np.array(self.COM_pos_local)
-        readings['COM_pos_local_filter'] = np.array(self.COM_pos_local_filter)
+        readings['COM_pos_local_filtered'] = np.array(
+            self.COM_pos_local_filtered)
         readings['support_polygon_centre'] = self.support_polygon_centre[0]
         readings['support_polygon_centre_surrogate'] = \
             self.support_polygon_centre_surrogate[0]
@@ -1499,19 +1495,26 @@ class ValkyrieEnv(gym.Env):
         """Calculate centre of pressure. (NOTE: don't understand this yet)"""
         # TODO ground contact detection using contact point
         foot_ground_contact = []
-        ankle_roll_contact = p.getContactPoints(self.robot_id,
-                                                self.plane_id,
-                                                self.joint_idx['leftAnkleRoll'],
-                                                -1)
+        ankle_roll_contact = p.getContactPoints(
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['leftAnkleRoll'],
+            -1)
         ankle_pitch_contact = p.getContactPoints(
-            self.robot_id, self.plane_id, self.joint_idx['leftAnklePitch'], -1)
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['leftAnklePitch'],
+            -1)
         foot_ground_contact.extend(ankle_roll_contact)
         foot_ground_contact.extend(ankle_pitch_contact)
         left_contact_info = foot_ground_contact
 
         foot_ground_contact = []
         ankle_roll_contact = p.getContactPoints(
-            self.robot_id, self.plane_id, self.joint_idx['rightAnkleRoll'], -1)
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['rightAnkleRoll'],
+            -1)
         ankle_pitch_contact = p.getContactPoints(
             self.robot_id,
             self.plane_id,
@@ -1521,9 +1524,11 @@ class ValkyrieEnv(gym.Env):
         foot_ground_contact.extend(ankle_pitch_contact)
         right_contact_info = foot_ground_contact
 
-        self.COP_info = self.COP_filter_method(right_contact_info,
-                                               left_contact_info)  # right first
-        self.COP_info_filtered = self.COP_filter_method.get_filtered_COP()
+        self.COP_filter(
+            right_contact_info=right_contact_info,
+            left_contact_info=left_contact_info)
+        self.COP_info = self.COP_filter.get_COP()
+        self.COP_info_filtered = self.COP_filter.get_filtered_COP()
         return self.COP_info_filtered
 
     def calculate_pelvis_acc(self):
