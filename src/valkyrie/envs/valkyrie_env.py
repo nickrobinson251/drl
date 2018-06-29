@@ -66,7 +66,7 @@ KD_DEFAULTS = {
 }
 
 
-class ValkyrieEnv(gym.Env):
+class ValkyrieEnvBase(gym.Env):
     metadata = {
         'render.modes': ['human', 'rgb_array'],
         'video.frames_per_second': 50
@@ -292,6 +292,7 @@ class ValkyrieEnv(gym.Env):
     def disconnect(self):
         """Disconnect from physics simulator."""
         p.disconnect()
+        self.close()
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -368,7 +369,7 @@ class ValkyrieEnv(gym.Env):
             self.initialise_filtering()
             self.perform_filtering()
         self.calculate_ground_contact_points()
-        self.get_support_polygon()
+        # self.get_support_polygon()
         for joint in self.controlled_joints:
             joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
             self.last_torque_applied[joint] = joint_state[3]
@@ -376,7 +377,7 @@ class ValkyrieEnv(gym.Env):
     def step(self, action, pelvis_push_force=[0, 0, 0]):
         """Take action, get observation, reward, done (bool), info (empty)."""
         torque_dict = self.calculate_PD_torque(action)
-        self.set_control(action)
+        # self.set_control(action)
         # higher frequency for physics simulation
         for i in range(self._action_repeats):
             # displacement from COM to the centre of the pelvis
@@ -391,7 +392,7 @@ class ValkyrieEnv(gym.Env):
                 self.pd_torque_unfiltered[joint] = \
                     self.pd_controller[joint].u_raw
                 self.pd_torque_adjusted[joint] = self.pd_controller[joint].u_adj
-            self.set_control(action)
+            # self.set_control(action)
             self.set_PD_velocity_control(torque_dict)
             p.stepSimulation()  # one simulation step
 
@@ -531,41 +532,9 @@ class ValkyrieEnv(gym.Env):
             self.joint_idx[joint_name] = joint_index
             self.joint_idx2name[joint_index] = joint_name
 
-    def render(self, mode='human', close=False):
-        p.addUserDebugLine(
-            self.COM_pos + np.array([0, 0, 2]),
-            self.COM_pos + np.array([0, 0, -2]),
-            [1, 0, 0],
-            5,
-            0.1)  # TODO rendering to draw COM
-        p.addUserDebugLine(
-            self.support_polygon_centre[0]+np.array([0, 0, 2]),
-            self.support_polygon_centre[0]+np.array([0, 0, -2]),
-            [0, 1, 0],
-            5,
-            0.1)  # TODO rendering to draw support polygon
-        p.addUserDebugLine(
-            self.support_polygon_centre[0]+np.array([2, 0, 0]),
-            self.support_polygon_centre[0]+np.array([-2, 0, 0]),
-            [0, 1, 0],
-            5,
-            0.1)  # TODO rendering to draw support polygon
-
-    def start_logging_video(self):
-        """Begin saving MP4 video of simulation state."""
-        self.logId = p.startStateLogging(
-            loggingType=p.STATE_LOGGING_VIDEO_MP4,
-            fileName=self._logFileName + '/video.mp4')
-        p.startStateLogging(self.logId)
-
-    def stop_logging_video(self):
-        """Stop recording MP4 video of simulation state."""
-        p.stopStateLogging(self.logId)
-
     def _termination(self):
-        """Same as self.is_fallen. True if robot_id has fallen, else False.."""
-        # return (self.steps_taken > self.max_steps) or (self.is_fallen())
-        return self.is_fallen()
+        """True if robot_id has fallen or max_steps reached."""
+        return (self.steps_taken > self.max_steps) or (self.is_fallen())
 
     def reset_joint_states(self, base_pos=None, base_orn=None):
         """Reset joints to default configuration, and base velocity to zero."""
@@ -834,7 +803,428 @@ class ValkyrieEnv(gym.Env):
         # observation_filtered[59]=self.right_contact_filter.y
         return observation_filtered
 
-    def get_reading(self):
+    def calculate_COM_position(self):
+        """Get position of Centre of Mass."""
+        # update global COM position
+        summ = np.zeros(3)
+        for link, mass in self.link_masses.items():
+            summ += np.array(self.link_COM_position[link]) * mass
+        summ /= self.total_mass
+        self.COM_pos = summ
+
+        # update local COM position w.r.t centre of support polygon
+        right_foot_info = p.getLinkState(
+            self.robot_id,
+            self.joint_idx['rightAnkleRoll'],
+            computeLinkVelocity=0)
+        left_foot_info = p.getLinkState(
+            self.robot_id,
+            self.joint_idx['leftAnkleRoll'],
+            computeLinkVelocity=0)
+        # Transformation from the link frame position to centre of bottom of
+        # foot w.r.t link frame
+        T = np.array([[0.045], [0], [-0.088]])  # (3, 1) column vector
+        right_quat = right_foot_info[1]
+        left_quat = left_foot_info[1]
+        right_T1 = self.transform(right_quat) @ T
+        left_T1 = self.transform(left_quat) @ T
+        right_foot_bottom_centre = right_foot_info[4] + right_T1.T
+        left_foot_bottom_centre = left_foot_info[4] + left_T1.T
+        # support polygon changes if there is foot contact
+        if self.is_ground_contact('right') and self.is_ground_contact('left'):
+                self.support_polygon_centre = (
+                    right_foot_bottom_centre + left_foot_bottom_centre) / 2.0
+        elif self.is_ground_contact('right'):
+                self.support_polygon_centre = right_foot_bottom_centre
+        elif self.is_ground_contact('left'):
+            self.support_polygon_centre = left_foot_bottom_centre
+        # else both feet not in contact: maintain current support_polygon value.
+        self.COM_pos_local = np.ravel(self.COM_pos-self.support_polygon_centre)
+
+        self.support_polygon_centre_surrogate = (
+            right_foot_bottom_centre + left_foot_bottom_centre) / 2.0
+        # set z value to the lowest of the two feet i.e. closest to the floor
+        self.support_polygon_centre_surrogate[0][2] = min(
+            right_foot_bottom_centre[0][2], left_foot_bottom_centre[0][2])
+        return self.COM_pos
+
+    def calculate_link_COM_velocity(self):
+        """Get centre of mass velocity for all links and base."""
+        self.link_COM_velocity = {}
+        base_pos_vel, base_orn_vel = p.getBaseVelocity(self.robot_id)
+        self.link_COM_velocity["pelvisBase"] = base_pos_vel
+        for joint, idx in self.joint_idx.items():
+            info = p.getLinkState(self.robot_id, idx, computeLinkVelocity=1)
+            self.link_COM_velocity[joint] = info[6]
+        return self.link_COM_velocity
+
+    def calculate_link_COM_position(self):
+        """Compute centre of mass position for all links and base."""
+        self.link_COM_position = {}
+        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
+        # TODO check if base position is the COM of the pelvis
+        self.link_COM_position["pelvisBase"] = np.array(base_pos)
+        for joint, idx in self.joint_idx.items():
+            info = p.getLinkState(self.robot_id, idx)
+            self.link_COM_position[joint] = info[0]
+        return self.link_COM_position
+
+    def calculate_link_masses(self):
+        """Compute link mass and total mass information."""
+        info = p.getDynamicsInfo(self.robot_id, -1)  # for base link
+        self.link_masses = dict()
+        self.link_masses["pelvisBase"] = info[0]
+        self.total_mass = info[0]
+        for joint, idx in self.joint_idx.items():
+            info = p.getDynamicsInfo(self.robot_id, idx)
+            self.link_masses[joint] = info[0]
+            self.total_mass += info[0]
+        return self.link_masses
+
+    def calculate_ground_contact_points(self):
+        """Compute foot contact points with ground.
+
+        Returns
+        -------
+        contact_points : numpy.array of length 3
+        """
+        foot_ground_contact_info = []
+        for side in ('right', 'left'):
+            if self.is_ground_contact(side):
+                ankle_roll_contact = p.getContactPoints(
+                    self.robot_id,
+                    self.plane_id,
+                    self.joint_idx[side+'AnkleRoll'],
+                    -1)
+                ankle_pitch_contact = p.getContactPoints(
+                    self.robot_id,
+                    self.plane_id,
+                    self.joint_idx[side+'AnklePitch'],
+                    -1)
+                # use extend not append because getContactPoints returns a list
+                foot_ground_contact_info.extend(ankle_roll_contact)
+                foot_ground_contact_info.extend(ankle_pitch_contact)
+        # get just x, y cartesian coordinates of contact position on robot_id
+        self.contact_points = np.array(
+            [info[5][0:2] for info in foot_ground_contact_info])
+        return self.contact_points
+
+    def get_capture_point(self):
+        """Physical properties derived from capture point theory."""
+        # input x is the target displacement w.r.t centre of foot
+        h = self.COM_pos_local[2]  # height of COM w.r.t bottom of foot
+        # h = self.COM_pos[2] - self.support_polygon_centre[0][2]
+        z = max(0.05, h)  # Make sure denominator is not zero
+        COM_vel = self.COM_vel
+        cp = COM_vel * np.sqrt(z / self.g)
+        return np.array(cp)
+
+    def target_COM_velocity(self, target, axis='x'):
+        """Return target velocity for target displacement wrt centre of foot."""
+        if axis == 'x':
+            com_position = self.COM_pos_local[0]  # COM pos wrt to bottom foot
+        elif axis == 'y':
+            com_position = self.COM_pos_local[1]
+        else:
+            raise ValueError("axis must be 'x' or 'y'. Got '{}'".format(axis))
+        dist = target - com_position
+        h = self.COM_pos_local[2]  # height of COM w.r.t bottom of foot
+        z = max(0.01, h)  # Make sure denominator is not zero
+        tau = np.sqrt(z / self.g)
+        velocity = dist / tau
+        return velocity
+
+    def transform(self, quaternions):
+        """Transform quaternion into rotation matrix.
+
+        quaternions : list of length 4
+        """
+        qx, qy, qz, qw = quaternions
+
+        x2 = qx + qx
+        y2 = qy + qy
+        z2 = qz + qz
+        xx = qx * x2
+        yy = qy * y2
+        wx = qw * x2
+        xy = qx * y2
+        yz = qy * z2
+        wy = qw * y2
+        xz = qx * z2
+        zz = qz * z2
+        wz = qw * z2
+
+        m = np.empty([3, 3])
+        m[0, 0] = 1.0 - (yy + zz)
+        m[0, 1] = xy - wz
+        m[0, 2] = xz + wy
+        m[1, 0] = xy + wz
+        m[1, 1] = 1.0 - (xx + zz)
+        m[1, 2] = yz - wx
+        m[2, 0] = xz - wy
+        m[2, 1] = yz + wx
+        m[2, 2] = 1.0 - (xx + yy)
+
+        return m
+
+    def is_ground_contact(self, side=None):
+        """True if robot_id is in contact with ground.
+
+        Parameters
+        ----------
+        side : str (optional)
+            Either 'left' or 'right', else checks both sides.
+       """
+        if side:
+            ground_contact_points = p.getContactPoints(
+                self.robot_id,
+                self.plane_id,
+                self.joint_idx[side+'AnkleRoll'],
+                -1)
+            return len(ground_contact_points) > 0
+        else:
+            is_left_contact = self.is_ground_contact('left')
+            is_right_contact = self.is_ground_contact('right')
+            return is_left_contact or is_right_contact
+
+    def is_fallen(self):
+        """Return True if robot has fallen, else False."""
+        base_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
+        # TODO check is_fallen criteria
+        if base_pos[2] <= 0.3 or self.COM_pos[2] <= 0.3:
+            return True
+        for joint in self.controllable_joints:
+            if 'Ankle' not in joint:  # check if any part except feet on floor
+                contact_points = p.getContactPoints(
+                    self.robot_id,
+                    self.plane_id,
+                    self.joint_idx[joint],
+                    -1)  # -1 for base
+                if len(contact_points) > 0:
+                    return True
+        return False
+
+    def calculate_COP(self):
+        """Calculate centre of pressure."""
+        # TODO ground contact detection using contact point
+        foot_ground_contact = []
+        ankle_roll_contact = p.getContactPoints(
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['leftAnkleRoll'],
+            -1)
+        ankle_pitch_contact = p.getContactPoints(
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['leftAnklePitch'],
+            -1)
+        foot_ground_contact.extend(ankle_roll_contact)
+        foot_ground_contact.extend(ankle_pitch_contact)
+        left_contact_info = foot_ground_contact
+
+        foot_ground_contact = []
+        ankle_roll_contact = p.getContactPoints(
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['rightAnkleRoll'],
+            -1)
+        ankle_pitch_contact = p.getContactPoints(
+            self.robot_id,
+            self.plane_id,
+            self.joint_idx['rightAnklePitch'],
+            -1)
+        foot_ground_contact.extend(ankle_roll_contact)
+        foot_ground_contact.extend(ankle_pitch_contact)
+        right_contact_info = foot_ground_contact
+
+        self.COP_filter(
+            right_contact_info=right_contact_info,
+            left_contact_info=left_contact_info)
+        self.COP_info = self.COP_filter.get_COP()
+        self.COP_info_filtered = self.COP_filter.get_filtered_COP()
+        return self.COP_info_filtered
+
+    def calculate_pelvis_acc(self):
+        """Calculate pelvis acceleration. (NOTE: don't understand this yet)"""
+        # TODO add pelvis acceleration
+        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
+        R = self.transform(base_quat)
+        R_i = np.linalg.inv(R)
+        pelvis_vel, _ = p.getBaseVelocity(self.robot_id)
+        stop = len(self.pelvis_vel_history_array) - 2
+        self.pelvis_vel_history_array[0:stop, :, None] = \
+            self.pelvis_vel_history_array[1:stop+1, :, None]  # shift element
+        for i in range(len(self.pelvis_vel_history_array)-1):
+            self.pelvis_vel_history_array[i] = \
+                self.pelvis_vel_history_array[i+1]
+
+        self.pelvis_vel_history_array[
+            len(self.pelvis_vel_history_array) - 1, :] = np.array(pelvis_vel)
+        x = self.pelvis_vel_history_array[:, 0]
+        y = self.pelvis_vel_history_array[:, 1]
+
+        z = self.pelvis_vel_history_array[:, 2]
+        # time step
+        t = np.arange(len(self.pelvis_vel_history_array)) * self._dt_physics
+        x_acc = np.polyfit(t, x, 1)  # use slope of velocity as acceleration
+        y_acc = np.polyfit(t, y, 1)
+        z_acc = np.polyfit(t, z, 1)
+        self.pelvis_acc = np.array([x_acc[0], y_acc[0], z_acc[0]])
+        self.pelvis_acc_base = np.transpose(R_i @ self.pelvis_acc.transpose())
+
+        self.pelvis_vel_history = np.array(pelvis_vel)
+        self.pelvis_vel_history_base = np.transpose(
+            R_i @self.pelvis_vel_history.transpose())
+
+    def calculate_COM_velocity(self):
+        """Calculate velocity of Centre of Mass."""
+        summ = np.zeros((1, 3))
+        for link, mass in self.link_masses.items():
+            summ += np.array(self.link_COM_velocity[link]) * mass
+        summ /= self.total_mass
+        self.COM_vel[0:3] = np.array(summ)
+        return self.COM_vel
+
+    def calculate_PD_torque(self, u):
+        """Calculate torque using self desinged PD controller.
+
+        Parameters
+        ----------
+        u : list of same length as self.controlled_joints
+            target position for controlled joint 0, 1, ..., nu
+
+        Returns
+        -------
+        torques : dict
+            {joint: torque} as computed by self.pd_controller
+        """
+        # Set control. pd_controller call will fail if any element of u is NaN
+        torques = dict()
+        for i, joint in enumerate(self.controlled_joints):
+            if joint in self.Kp:  # PD gains defined for joint
+                torque = self.pd_controller[joint].control(u[i], 0.0)
+                torque = np.clip(torque, -self.u_max[joint], self.u_max[joint])
+                torques[joint] = torque
+        return torques
+
+    def joint_reaction_force(self, side):
+        """Return total reaction force (torque) on given side.
+
+        Parameters
+        ----------
+        side : str
+            Either 'left' or 'right'
+        """
+        ankle_joint_state = p.getJointState(self.robot_id,
+                                            self.joint_idx[side+'AnklePitch'])
+        _, _, _, Mx, My, Mz = ankle_joint_state[2]
+        total_torque = np.sqrt(np.sum(np.square([Mx, My, Mz])))
+        return total_torque
+
+    def set_zero_order_hold_nominal_pose(self):
+        """Set robot_id into default standing position.
+
+        Default position is given by `default_joint_config` attribute.
+        """
+        for joint in self.controllable_joints:
+            p.setJointMotorControl2(
+                self.robot_id,
+                self.joint_idx[joint],
+                p.POSITION_CONTROL,
+                targetPosition=self.default_joint_config[joint],
+                force=self.u_max[joint])
+
+    def set_PD_velocity_control(self, torque_dict):
+        """Set the maximum motor force limit for joints.
+
+        We are using this as a form of _torque_ control, where the target
+        velocity is _always_ set to be the maximum velocity allowed, and we
+        input the maximum torque that we want to apply to reach that velocity.
+
+        When a step is taken, force (up to the limit we input) is applied to
+        reach the target velocity, where
+            target velocity = self.v_max * sign(torque).
+
+        Parameters
+        ----------
+        torque_dict : dict of {str: float}
+            joint names and the maximum torque to allow upon taking a step
+        """
+        for joint, torque in torque_dict.items():
+            p.setJointMotorControl2(
+                self.robot_id,
+                self.joint_idx[joint],
+                # set desired velocity of joint
+                targetVelocity=np.sign(torque)*self.v_max[joint],
+                # set maximum motor force that can be used
+                force=np.abs(torque),
+                controlMode=p.VELOCITY_CONTROL)
+
+    def rotX(self, theta):
+        """Roll rotation matrix."""
+        R = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, np.cos(theta), -np.sin(theta)],
+            [0.0, np.sin(theta), np.cos(theta)]])
+        return R
+
+    def rotY(self, theta):
+        """Pitch rotation matrix."""
+        R = np.array([
+            [np.cos(theta), 0.0, np.sin(theta)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(theta), 0.0, np.cos(theta)]])
+        return R
+
+    def rotZ(self, theta):
+        """Yaw rotation matrix."""
+        R = np.array([
+            [np.cos(theta), -np.sin(theta), 0.0],
+            [np.sin(theta), np.cos(theta), 0.0],
+            [0.0, 0.0, 1.0]])
+        return R
+
+    def render(self, mode='human', close=False):
+        p.addUserDebugLine(
+            self.COM_pos + np.array([0, 0, 2]),
+            self.COM_pos + np.array([0, 0, -2]),
+            [1, 0, 0],
+            5,
+            0.1)  # TODO rendering to draw COM
+        p.addUserDebugLine(
+            self.support_polygon_centre[0]+np.array([0, 0, 2]),
+            self.support_polygon_centre[0]+np.array([0, 0, -2]),
+            [0, 1, 0],
+            5,
+            0.1)  # TODO rendering to draw support polygon
+        p.addUserDebugLine(
+            self.support_polygon_centre[0]+np.array([2, 0, 0]),
+            self.support_polygon_centre[0]+np.array([-2, 0, 0]),
+            [0, 1, 0],
+            5,
+            0.1)  # TODO rendering to draw support polygon
+
+    def start_logging_video(self):
+        """Begin saving MP4 video of simulation state."""
+        self.logId = p.startStateLogging(
+            loggingType=p.STATE_LOGGING_VIDEO_MP4,
+            fileName=self._logFileName + '/video.mp4')
+        p.startStateLogging(self.logId)
+
+    def stop_logging_video(self):
+        """Stop recording MP4 video of simulation state."""
+        p.stopStateLogging(self.logId)
+
+    def toggle_rendering(self):
+        """Turn visualisation on/off."""
+        if self._render:  # It's on, so turn it off
+            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
+            self._render = False
+        else:
+            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
+            self._render = True
+
+    def diagnostics(self):
         """Return dictionary with name and value of all measure quantities."""
         readings = dict()
         readings['rightGroundContact'] = self.is_ground_contact('right')
@@ -902,7 +1292,7 @@ class ValkyrieEnv(gym.Env):
                 readings[joint+'PDPosition'] = \
                     self.pd_controller[joint].filtered_position
                 readings[joint+'PDVelocity'] = \
-                    self.pd_controller[joint].filtered_velocit
+                    self.pd_controller[joint].filtered_velocity
                 readings[joint+'PDPositionAdjusted'] = \
                     self.pd_controller[joint].adjusted_position
                 readings[joint+'PDVelocityAdjusted'] = \
@@ -914,15 +1304,12 @@ class ValkyrieEnv(gym.Env):
                     self.pd_controller[joint].kalman_filtered_position
                 readings[joint+'PDVelocityKalman'] = \
                     self.pd_controller[joint].kalman_filtered_velocity
-                readings[joint+'PD_torqueWithAdjustedFeedback'] = \
-                    self.pd_controller[joint].u_adj
                 readings[joint+'PDFiltered_torque'] = \
                     self.pd_controller[joint].u_kal
                 readings[joint+'PDUnfiltered_torque'] = \
                     self.pd_controller[joint].u_raw
-                if len(self.pd_torque_adjusted) > 0:  # non-empty if step taken
-                    readings[joint+'PDAdjusted_torque'] = \
-                        self.pd_torque_adjusted[joint]
+                readings[joint+'PDAdjusted_torque'] = \
+                    self.pd_controller[joint].u_adj
 
         for joint in ('torsoPitch',
                       'rightHipPitch',
@@ -943,21 +1330,6 @@ class ValkyrieEnv(gym.Env):
         readings['rightKneePitchAngle10HzFiltered'] = observation[34]
         readings['rightAnklePitchAngle10HzFiltered'] = observation[36]
 
-        # readings.update({'torsoPitchAngle50HzFiltered':
-        # self.pd_controller['torsoPitch'].measured_position})
-        # readings.update({'leftHipPitchAngle50HzFiltered':
-        # self.pd_controller['leftHipPitch'].measured_position})
-        # readings.update({'leftKneePitchAngle50HzFiltered':
-        # self.pd_controller['leftKneePitch'].measured_position})
-        # readings.update({'leftAnklePitchAngle50HzFiltered':
-        # self.pd_controller['leftAnklePitch'].measured_position})
-        # readings.update({'rightHipPitchAngle50HzFiltered':
-        # self.pd_controller['rightHipPitch'].measured_position})
-        # readings.update({'rightKneePitchAngle50HzFiltered':
-        # self.pd_controller['rightKneePitch'].measured_position})
-        # readings.update({'rightAnklePitchAngle50HzFiltered':
-        # self.pd_controller['rightAnklePitch'].measured_position})
-
         readings['pelvis_acc_global'] = self.pelvis_acc
         readings['pelvis_acc_base'] = self.pelvis_acc_base
         readings['pelvis_vel_global'] = self.pelvis_vel_history
@@ -968,191 +1340,21 @@ class ValkyrieEnv(gym.Env):
         readings.update(reward_term)
         return readings
 
-    def calculate_COM_position(self):
-        """Get position of Centre of Mass."""
-        summ = np.zeros(3)
-        for link, mass in self.link_masses.items():
-            summ += np.array(self.link_COM_position[link]) * mass
-        summ /= self.total_mass
-        self.COM_pos = summ  # update global COM position
-
-        # update local COM position w.r.t centre of support polygon
-        right_foot_info = p.getLinkState(self.robot_id,
-                                         self.joint_idx['rightAnkleRoll'],
-                                         computeLinkVelocity=0)
-        left_foot_info = p.getLinkState(self.robot_id,
-                                        self.joint_idx['leftAnkleRoll'],
-                                        computeLinkVelocity=0)
-
-        # T = np.array([[0.066],[0],[-0.056]])#Transformation from the link
-        # frame position to geometry centre w.r.t link frame
-        # Transformation from the link frame position to centre of bottom of
-        # foot w.r.t link frame
-        T = np.array([[0.045], [0], [-0.088]])
-        right_quat = right_foot_info[1]
-        left_quat = left_foot_info[1]
-        right_T1 = self.transform(right_quat) @ T
-        left_T1 = self.transform(left_quat) @ T
-        right_foot_bottom_centre = right_foot_info[4] + right_T1.T
-        left_foot_bottom_centre = left_foot_info[4] + left_T1.T
-
-        # support polygon changes if their is foot contact
-        if self.is_ground_contact('right'):
-            if self.is_ground_contact('left'):
-                self.support_polygon_centre = (
-                    right_foot_bottom_centre + left_foot_bottom_centre) / 2.0
-            else:
-                self.support_polygon_centre = right_foot_bottom_centre
-        elif self.is_ground_contact('left'):
-            self.support_polygon_centre = left_foot_bottom_centre
-        # else both feet not in contact. Maintain current support_polygon value.
-
-        self.COM_pos_local = np.ravel(self.COM_pos-self.support_polygon_centre)
-        self.support_polygon_centre_surrogate = (
-            right_foot_bottom_centre + left_foot_bottom_centre) / 2.0
-        # set z value to the lowest of the two feet i.e. closest to the floor
-        self.support_polygon_centre_surrogate[0][2] = min(
-            right_foot_bottom_centre[0][2], left_foot_bottom_centre[0][2])
-        return self.COM_pos
-
-    def calculate_link_COM_velocity(self):
-        """Get centre of mass velocity for all links and base."""
-        self.link_COM_velocity = {}
-        base_pos_vel, base_orn_vel = p.getBaseVelocity(self.robot_id)
-        self.link_COM_velocity["pelvisBase"] = base_pos_vel
-        for joint, idx in self.joint_idx.items():
-            info = p.getLinkState(self.robot_id, idx, computeLinkVelocity=1)
-            self.link_COM_velocity[joint] = info[6]
-        return self.link_COM_velocity
-
-    # def target_COM_velocity(self, x, axis='x'):
-    #     # input x is the target displacement w.r.t centre of foot
-    #     if axis == 'x':
-    #         x_tar = self.COM_pos_local[0]
-    #     elif axis == 'y':
-    #         x_tar = self.COM_pos_local[1]
-    #     else:
-    #         x_tar = self.COM_pos_local[0]
-    #     dist = x - x_tar
-    #     z = max(0.05, x_tar)  # Make sure denominator is not zero
-    #     tau = np.sqrt(z / 9.8)
-    #     V = dist / tau
-    #     return V
-
-    def calculate_link_COM_position(self):
-        """Compute centre of mass position for all links and base."""
-        self.link_COM_position = {}
-        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
-        # base_orn = p.getEulerFromQuaternion(base_quat)
-        # Transformation from the pelvis base position to pelvis COM w.r.t
-        # local pelvis frame
-        # T = np.array([[-0.00532], [-0.003512], [-0.0036]])
-        # T1 = (self.transform(base_quat)) @ T  # using quaternion
-        # T1 = (self.rotZ(base_orn[2]))@(self.rotY(base_orn[1]))
-        # @(self.rotX(base_orn[0]))@T  # using Euler angles
-        # base_com = base_pos + T1.T  # [[]]
-        # base_com = base_com[0]  # []
-        # self.link_COM_position.update({"pelvisBase": base_com})
-        # TODO check if base position is the COM of the pelvis base position is
-        # the COM of the pelvis
-        self.link_COM_position["pelvisBase"] = np.array(base_pos)
-        for joint, idx in self.joint_idx.items():
-            info = p.getLinkState(self.robot_id, idx, computeLinkVelocity=0)
-            self.link_COM_position[joint] = info[0]
-        return self.link_COM_position
-
-    def calculate_link_masses(self):
-        """Compute link mass and total mass information."""
-        info = p.getDynamicsInfo(self.robot_id, -1)  # for base link
-        self.link_masses = dict()
-        self.link_masses["pelvisBase"] = info[0]
-        self.total_mass = info[0]
-        for joint, idx in self.joint_idx.items():
-            info = p.getDynamicsInfo(self.robot_id, idx)
-            self.link_masses[joint] = info[0]
-            self.total_mass += info[0]
-        return self.link_masses
-
-    def calculate_ground_contact_points(self):
-        """Compute foot contact points with ground.
-
-        Returns
-        -------
-        contact_points : numpy.array of length 3
-        """
-        foot_ground_contact_info = []
-        for side in ('right', 'left'):
-            if self.is_ground_contact(side):
-                ankle_roll_contact = p.getContactPoints(
-                    self.robot_id,
-                    self.plane_id,
-                    self.joint_idx[side+'AnkleRoll'],
-                    -1)
-                ankle_pitch_contact = p.getContactPoints(
-                    self.robot_id,
-                    self.plane_id,
-                    self.joint_idx[side+'AnklePitch'],
-                    -1)
-                # use extend not append because getContactPoints returns a list
-                foot_ground_contact_info.extend(ankle_roll_contact)
-                foot_ground_contact_info.extend(ankle_pitch_contact)
-        # get just x, y cartesian coordinates of contact position on robot_id
-        self.contact_points = np.array(
-            [info[5][0:2] for info in foot_ground_contact_info])
-        return self.contact_points
-
-    def get_support_polygon(self):
-        foot_ground_contact = []
-        for side in ('right', 'left'):
-            if self.is_ground_contact(side):
-                ankle_roll_contact = p.getContactPoints(
-                    self.robot_id,
-                    self.plane_id,
-                    self.joint_idx[side+'AnkleRoll'],
-                    -1)
-                ankle_pitch_contact = p.getContactPoints(
-                    self.robot_id,
-                    self.plane_id,
-                    self.joint_idx[side+'AnklePitch'],
-                    -1)
-                foot_ground_contact.extend(ankle_roll_contact)
-                foot_ground_contact.extend(ankle_pitch_contact)
-        foot_ground_contact_point = np.array(
-            [data[5] for data in foot_ground_contact])
-
-        if len(foot_ground_contact_point) < 1:
-            return np.array([[0.0, 0.0, 0.0]])
-
-        # only use x and y coordinates
-        self.contact_points = foot_ground_contact_point[:, 0:2]
-        if len(self.contact_points) >= 4:
-            hull = ConvexHull(self.contact_points)
-            self.hull = self.contact_points[hull.vertices, :]
-        else:
-            self.hull = self.contact_points
-        return self.hull
-
-    def toggle_rendering(self):
-        """Turn visualisation on/off."""
-        if self._render:  # It's on, so turn it off
-            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
-            self._render = False
-        else:
-            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
-            self._render = True
-
-    def debug(self):  # for debugging
-        # Transformation from the link frame position to geometry centre w.r.t
-        # link frame
-        T = np.array([[0.066], [0], [-0.056]])
-        # Transformation from the link frame position to centre of bottom of
-        # foot w.r.t link frame
-        T1 = np.array([[0.066], [0], [-0.088]])
+    def _debug(self):
+        # Transformation from link frame pos to geometry centre wrt link frame
+        T = np.array([[0.066],
+                      [0],
+                      [-0.056]])
+        # Trans from link frame pos to centre of bottom of foot wrt link frame
+        T1 = np.array([[0.066],
+                       [0],
+                       [-0.088]])
         for side in ('right', 'left'):
             (link_world_pos, _, local_inertia_pos, _, link_frame_pos,
-             link_frame_orn) = p.getLinkState(self.robot_id,
-                                              self.joint_idx[side+'AnkleRoll'],
-                                              computeLinkVelocity=0)
+             link_frame_orn) = p.getLinkState(
+                 self.robot_id,
+                 self.joint_idx[side+'AnkleRoll'],
+                 computeLinkVelocity=0)
             T_ = (self.transform(link_frame_orn)) @ T
             T1_ = (self.transform(link_frame_orn)) @ T1
 
@@ -1170,442 +1372,177 @@ class ValkyrieEnv(gym.Env):
             print('worldLinkFramePosition')
             print(link_frame_pos)
 
-    def get_capture_point(self):
-        """Physical properties derived from capture point theory."""
-        # input x is the target displacement w.r.t centre of foot
-        h = self.COM_pos_local[2]  # height of COM w.r.t bottom of foot
-        # h = self.COM_pos[2] - self.support_polygon_centre[0][2]
-        z = max(0.05, h)  # Make sure denominator is not zero
-        COM_vel = self.COM_vel
-        cp = COM_vel * np.sqrt(z / self.g)
-        return np.array(cp)
 
-    def target_COM_velocity(self, target, axis='x'):
-        """Return target velocity for target displacement wrt centre of foot."""
-        if axis == 'x':
-            com_position = self.COM_pos_local[0]  # COM pos wrt to bottom foot
-        elif axis == 'y':
-            com_position = self.COM_pos_local[1]
-        else:
-            raise ValueError("axis must be 'x' or 'y'. Got '{}'".format(axis))
-        dist = target - com_position
-        h = self.COM_pos_local[2]  # height of COM w.r.t bottom of foot
-        z = max(0.01, h)  # Make sure denominator is not zero
-        tau = np.sqrt(z / self.g)
-        velocity = dist / tau
-        return velocity
+class ValkyrieEnvBasic(ValkyrieEnvBase):
 
-    def calculate_rejectable_force(self, period):
-        """
-        Parameters
-        ----------
-        period : int
-            Impulse lasting period
-        """
-        foot_length = 0.26  # TODO check length of foot
-        # TODO check whether COM is at the centre of foot
-        V = np.array([self.target_COM_velocity(-foot_length / 2, 'x'),
-                      self.target_COM_velocity(foot_length / 2, 'x')])
-        F = V * self.total_mass / period
-        return F
-
-    def calculate_rejectable_force_xy(self, period):
-        """
-        Parameters
-        ----------
-        period : int
-            Impulse lasting period
-        """
-        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
-        base_orn = p.getEulerFromQuaternion(base_quat)
-        Rz = self.rotZ(base_orn[2])
-        Rz_i = np.linalg.inv(Rz)
-
-        hull = np.array(self.contact_points)
-        # hull = np.array(self.hull) # (i,2)
-
-        if np.shape(hull)[0] < 3:  # first axis
-            return 0, 0, 0, 0  # X max X min Y max Y min
-        hull = hull - self.COM_pos[0:2]  # support polygon hull w.r.t COM xy pos
-
-        # add z coordinate
-        hull_full = np.zeros((np.shape(hull)[0], 3))
-        hull_full[:, 0:2] = hull[:, 0:2]
-        # transform
-        # base velocity in adjusted yaw frame
-        hull_full_yaw = np.transpose(Rz_i @ hull_full.transpose())
-        hull = hull_full_yaw[:, 0:2]
-
-        x_pos = hull[:, 0]
-        y_pos = hull[:, 1]
-        x_pos_sort = np.sort(x_pos)  # small to large
-        x_min = x_pos_sort[0]
-        x_max = x_pos_sort[-1]
-        # x_min = (x_pos_sort[0]+x_pos_sort[1])/2.0
-        # x_max = (x_pos_sort[-1]+x_pos_sort[-2])/2.0
-        y_pos_sort = np.sort(y_pos)  # small to large
-        y_min = y_pos_sort[0]
-        y_max = y_pos_sort[-1]
-        # y_min = (y_pos_sort[0]+y_pos_sort[1])/2.0
-        # y_max = (y_pos_sort[-1]+y_pos_sort[-2])/2.0
-        h = self.COM_pos_local[2]  # height of COM w.r.t bottom of foot
-        z = max(0.05, h)  # Make sure denominator is not zero
-        tau = np.sqrt(z / self.g)
-        Fx_min = self.total_mass/tau*x_min/period
-        Fx_max = self.total_mass/tau*x_max/period
-        Fy_min = self.total_mass/tau*y_min/period
-        Fy_max = self.total_mass/tau*y_max/period
-
-        return Fx_min, Fx_max, Fy_min, Fy_max
-
-    def rotX(self, theta):
-        """Roll rotation matrix."""
-        R = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, np.cos(theta), -np.sin(theta)],
-            [0.0, np.sin(theta), np.cos(theta)]])
-        return R
-
-    def rotY(self, theta):
-        """Pitch rotation matrix."""
-        R = np.array([
-            [np.cos(theta), 0.0, np.sin(theta)],
-            [0.0, 1.0, 0.0],
-            [-np.sin(theta), 0.0, np.cos(theta)]])
-        return R
-
-    def rotZ(self, theta):
-        """Yaw rotation matrix."""
-        R = np.array([
-            [np.cos(theta), -np.sin(theta), 0.0],
-            [np.sin(theta), np.cos(theta), 0.0],
-            [0.0, 0.0, 1.0]])
-        return R
-
-    def transform(self, quaternions):
-        """Transform quaternion into rotation matrix.
-
-        quaternions : list of length 4
-        """
-        qx, qy, qz, qw = quaternions
-
-        x2 = qx + qx
-        y2 = qy + qy
-        z2 = qz + qz
-        xx = qx * x2
-        yy = qy * y2
-        wx = qw * x2
-        xy = qx * y2
-        yz = qy * z2
-        wy = qw * y2
-        xz = qx * z2
-        zz = qz * z2
-        wz = qw * z2
-
-        m = np.empty([3, 3])
-        m[0, 0] = 1.0 - (yy + zz)
-        m[0, 1] = xy - wz
-        m[0, 2] = xz + wy
-        m[1, 0] = xy + wz
-        m[1, 1] = 1.0 - (xx + zz)
-        m[1, 2] = yz - wx
-        m[2, 0] = xz - wy
-        m[2, 1] = yz + wx
-        m[2, 2] = 1.0 - (xx + yy)
-
-        return m
-
-    def is_ground_contact(self, side=None):
-        """True if robot_id is in contact with ground.
-
-        Parameters
-        ----------
-        side : str (optional)
-            Either 'left' or 'right', else checks both sides.
-       """
-        # TODO ground contact detection using contact point
-        if side:
-            ground_contact_points = p.getContactPoints(
-                self.robot_id,
-                self.plane_id,
-                self.joint_idx[side+'AnkleRoll'],
-                -1)
-            return len(ground_contact_points) > 0
-        else:
-            is_left_contact = self.is_ground_contact('left')
-            is_right_contact = self.is_ground_contact('right')
-            return is_left_contact or is_right_contact
-
-    def is_ground_contact_reacton_force(self, side):
-        """Return ground reaction force on given side.
-        (NOTE: don't yet understand calculation used)
-        Parameters
-        ----------
-        side : str
-            Either 'left' or 'right'
-        """
-        # TODO ground contact detection using ground reaction force
-        torque = self.joint_reaction_force(side)
-        # TODO adjust sigmoid function to represent actual contact as close
-        # as possible
-        # return 1/(1+np.exp(-(torque-9)))#sigmoid function
-        return 1 / (1 + np.exp(-0.3 * (torque - 4)))
-
-    def is_fallen(self):
-        """Return True if robot_id has fallen, else False."""
-        base_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
-        if base_pos[2] <= 0.3:  # TODO check is_fallen criteria
-            return True
-        if self.COM_pos[2] <= 0.3:
-            return True
-        for joint in self.controllable_joints:
-            if 'Ankle' not in joint:  # check if any part except feet on floor
-                contact_points = p.getContactPoints(self.robot_id,
-                                                    self.plane_id,
-                                                    self.joint_idx[joint],
-                                                    -1)  # -1 for base
-                if len(contact_points) > 0:
-                    return True
-        # COM_z = self.COM_pos_local[2]  # not suitable for walking
-        # COM_xy = np.linalg.norm([self.COM_pos_local[0],self.COM_pos_local[1]])
-        # if COM_z<COM_xy:#out of friction cone
-        #     is_fallen = True
-        return False
-
-    def caclulate_foot_COP(self, side):
-        """Calculate Centre of Pressure for foot of chosen side.
-
-        Parameters
-        ----------
-        side : str
-            Either 'left' or 'right'
-        """
-        foot_ground_contact = []
-        # TODO ground contact detection using contact point
-        ankle_roll_contact = p.getContactPoints(
-            self.robot_id,
-            self.plane_id,
-            self.joint_idx[side+'AnkleRoll'],
-            -1)
-        ankle_pitch_contact = p.getContactPoints(
-            self.robot_id,
-            self.plane_id,
-            self.joint_idx[side+'AnklePitch'],
-            -1)
-
-        foot_ground_contact.extend(ankle_roll_contact)
-        foot_ground_contact.extend(ankle_pitch_contact)
-        if not self.is_ground_contact(side):  # no contact
-            return [
-                0.0, 0.0, 0.0], [
-                0.0, 0.0, 0.0], False  # COP does not exists
-        # print(len(ankle_roll_contact))
-        pCOP = np.array([0, 0, 0])  # position of Center of pressure
-        # force among the x,y,z axis of world frame
-        contactForce = np.array([0, 0, 0])
-        # print(len(foot_ground_contact))
-        for i in range(len(foot_ground_contact)):
-            # contact normal of foot pointing towards plane_id
-            contactNormal = np.array(foot_ground_contact[i][7])
-            # contact normal of plane_id pointing towards foot
-            contactNormal = -contactNormal
-            contactNormalForce = np.array(foot_ground_contact[i][9])
-            contactPosition = np.array(
-                foot_ground_contact[i][5])  # position on plane_id
-            forceX = contactNormal[0] * contactNormalForce
-            forceY = contactNormal[1] * contactNormalForce
-            # force along the z axis is larger than zero
-            forceZ = max(abs(contactNormal[2] * contactNormalForce), 1e-6)
-            # sum of contact force
-            contactForce = contactForce + np.array([forceX, forceY, forceZ])
-            # integration of contact point times vertical force
-            pCOP = pCOP + contactPosition * forceZ
-        pCOP = pCOP / contactForce[2]
-        # pCOP[2] = 0.0  # z position is 0, on the plane_id
-        # contactForce = contactForce / len(foot_ground_contact)
-        return pCOP, contactForce, True
-
-    def caclulate_foot_COP2(self, side):
-        """Calculate Centre of Pressure for foot of chosen side.
-        (NOTE: don't understand difference to caclulate_foot_COP method)
-
-        Parameters
-        ----------
-        side : str
-            Either 'left' or 'right'
-        """
-        joint_state = p.getJointState(self.robot_id,
-                                      self.joint_idx[side+'AnkleRoll'])
-        joint_reaction_force = joint_state[2]  # [Fx, Fy, Fz, Mx, My, Mz]
-        Fx, Fy, Fz, Mx, My, Mz = -np.array(joint_reaction_force)
-        foot_info = p.getLinkState(
-            self.robot_id, self.joint_idx[side + 'AnkleRoll'],
-            computeLinkVelocity=0)
-        # link_frame_pos = foot_info[4]
-        link_frame_pos = foot_info[0]
-        # Transformation from link frame position to geometry centre w.r.t
-        # link frame
-        # T = np.array([[0.066],[0],[-0.056]])
-        # Transformation from link frame position to centre of bottom of foot
-        # w.r.t link frame
-        # T = np.array([[0.044], [0], [ -0.088]])
-        # right_quat = right_foot_info[1]
-        # left_quat = left_foot_info[1]
-        # right_T1 = (self.transform(right_quat)) @ T
-        # left_T1 = (self.transform(left_quat)) @ T
-        # print(right_T1)
-        # print(left_T1)
-        # right_foot_bottom_centre = right_foot_info[4] + right_T1.T
-        # left_foot_bottom_centre = left_foot_info[4] + left_T1.T
-
-        # TODO ground contact detection using contact point
-        if not self.is_ground_contact(side):  # no contact
-            return [
-                0.0, 0.0, 0.0], [
-                0.0, 0.0, 0.0], False  # COP does not exists
-        if Fz <= 1:  # z force
-            return [
-                0.0, 0.0, 0.0], [
-                0.0, 0.0, 0.0], False  # COP does not exists
-        d = link_frame_pos[2]  # z position
-        px = (-My-Fx*d)/Fz
-        py = (Mx - Fy*d)/Fz
-        # position of Center of pressure
-        pCOP = np.array(link_frame_pos) + np.array([px, py, -d])
-        # force among the x,y,z axis of world frame
-        contactForce = np.array([Fx, Fy, Fz])
-        # print(len(foot_ground_contact))
-        return pCOP, contactForce, True
-
-    def calculate_COP(self):
-        """Calculate centre of pressure. (NOTE: don't understand this yet)"""
-        # TODO ground contact detection using contact point
-        foot_ground_contact = []
-        ankle_roll_contact = p.getContactPoints(
-            self.robot_id,
-            self.plane_id,
-            self.joint_idx['leftAnkleRoll'],
-            -1)
-        ankle_pitch_contact = p.getContactPoints(
-            self.robot_id,
-            self.plane_id,
-            self.joint_idx['leftAnklePitch'],
-            -1)
-        foot_ground_contact.extend(ankle_roll_contact)
-        foot_ground_contact.extend(ankle_pitch_contact)
-        left_contact_info = foot_ground_contact
-
-        foot_ground_contact = []
-        ankle_roll_contact = p.getContactPoints(
-            self.robot_id,
-            self.plane_id,
-            self.joint_idx['rightAnkleRoll'],
-            -1)
-        ankle_pitch_contact = p.getContactPoints(
-            self.robot_id,
-            self.plane_id,
-            self.joint_idx['rightAnklePitch'],
-            -1)
-        foot_ground_contact.extend(ankle_roll_contact)
-        foot_ground_contact.extend(ankle_pitch_contact)
-        right_contact_info = foot_ground_contact
-
-        self.COP_filter(
-            right_contact_info=right_contact_info,
-            left_contact_info=left_contact_info)
-        self.COP_info = self.COP_filter.get_COP()
-        self.COP_info_filtered = self.COP_filter.get_filtered_COP()
-        return self.COP_info_filtered
-
-    def calculate_pelvis_acc(self):
-        """Calculate pelvis acceleration. (NOTE: don't understand this yet)"""
-        # TODO add pelvis acceleration
-        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
-        R = self.transform(base_quat)
-        R_i = np.linalg.inv(R)
-        pelvis_vel, _ = p.getBaseVelocity(self.robot_id)
-        stop = len(self.pelvis_vel_history_array) - 2
-        self.pelvis_vel_history_array[0:stop, :, None] = \
-            self.pelvis_vel_history_array[1:stop+1, :, None]  # shift element
-        for i in range(len(self.pelvis_vel_history_array)-1):
-            self.pelvis_vel_history_array[i] = \
-                self.pelvis_vel_history_array[i+1]
-
-        self.pelvis_vel_history_array[len(
-            self.pelvis_vel_history_array) - 1, :] = np.array(pelvis_vel)
-        x = self.pelvis_vel_history_array[:, 0]
-        y = self.pelvis_vel_history_array[:, 1]
-
-        z = self.pelvis_vel_history_array[:, 2]
-        # time step
-        t = np.arange(len(self.pelvis_vel_history_array)) * self._dt_physics
-        x_acc = np.polyfit(t, x, 1)  # use slope of velocity as acceleration
-        y_acc = np.polyfit(t, y, 1)
-        z_acc = np.polyfit(t, z, 1)
-        self.pelvis_acc = np.array([x_acc[0], y_acc[0], z_acc[0]])
-        self.pelvis_acc_base = np.transpose(R_i @ self.pelvis_acc.transpose())
-
-        self.pelvis_vel_history = np.array(pelvis_vel)
-        self.pelvis_vel_history_base = np.transpose(
-            R_i @self.pelvis_vel_history.transpose())
-
-    def calculate_COM_velocity(self):
-        """Calculate velocity of Centre of Mass."""
-        summ = np.zeros((1, 3))
-        for link, mass in self.link_masses.items():
-            summ += np.array(self.link_COM_velocity[link]) * mass
-        summ /= self.total_mass
-        self.COM_vel[0:3] = np.array(summ)
-        return summ
-
-    def calculate_PD_torque(self, u):
-        """Calculate torque using self desinged PD controller.
-
-        Parameters
-        ----------
-        u : list of same length as self.controlled_joints
-            target position for controlled joint 0, 1, ..., nu
+    def reward(self):
+        """Return reward for current state and terms used in the reward.
 
         Returns
         -------
-        torques : dict
-            {joint: torque} as computed by self.pd_controller
+        reward : float
+        reward_term : dict
+            {name: value} of all elements summed to make the reward
         """
-        # Set control. pd_controller call will fail if any element of u is NaN
-        torques = dict()
-        for i, joint in enumerate(self.controlled_joints):
-            if joint in self.Kp:  # PD gains defined for joint
-                torque = self.pd_controller[joint].control(u[i], 0.0)
-                torque = np.clip(torque, -self.u_max[joint], self.u_max[joint])
-                torques[joint] = torque
-        return torques
+        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
+        base_orn = p.getEulerFromQuaternion(base_quat)
+        chest_link_state = p.getLinkState(self.robot_id,
+                                          self.joint_idx['torsoRoll'],
+                                          computeLinkVelocity=1)
+        torso_roll_err, torso_pitch_err, _, _ = chest_link_state[1]
+        pelvis_roll_err, pelvis_pitch_err, _ = base_orn
+        # Nominal COM x and z position [0.0, 1.104]
+        # Nominal COM x and z position w.r.t COM of foot [0.0, 1.064] #TODO test
 
-    def joint_reaction_force(self, side):
-        """Return reaction force on given side.
+        # filtering for reward
+        x_pos_err = 0.0 - self.COM_pos_local[0]
+        y_pos_err = 0.0 - self.COM_pos_local[1]
+        z_pos_err = 1.175 * 1.02 - self.COM_pos_local[2]
 
-        Parameters
-        ----------
-        side : str
-            Either 'left' or 'right'
-        """
-        ankle_joint_state = p.getJointState(self.robot_id,
-                                            self.joint_idx[side+'AnklePitch'])
-        _, _, _, Mx, My, Mz = ankle_joint_state[2]
-        total_torque = np.sqrt(np.sum(np.square([Mx, My, Mz])))
-        return total_torque
+        xy_pos_target = np.array([0.0, 0.0])
+        xy_pos = self.COM_pos_local[[0, 1]]
+        xy_pos_err = np.linalg.norm(xy_pos - xy_pos_target)
 
-    def set_zero_order_hold_nominal_pose(self):
-        """Set robot_id into default standing position.
+        x_vel_err = self.target_COM_velocity(0.0, 'x') - self.COM_vel[0]
+        y_vel_err = self.target_COM_velocity(0.0, 'y') - self.COM_vel[1]
+        z_vel_err = 0.0 - self.COM_vel[2]
 
-        Default position is given by `default_joint_config` attribute.
-        """
-        for joint in self.controllable_joints:
-            p.setJointMotorControl2(
-                self.robot_id,
-                self.joint_idx[joint],
-                p.POSITION_CONTROL,
-                targetPosition=self.default_joint_config[joint],
-                force=self.u_max[joint])
+        xy_vel_target = np.array([self.target_COM_velocity(0.0, 'x'),
+                                  self.target_COM_velocity(0.0, 'y')])
+        xy_vel = self.COM_vel[[0, 1]]
+        xy_vel_err = np.linalg.norm(xy_vel - xy_vel_target)
+
+        # force distribution
+        (COP, contact_force, _, right_COP, right_contact_force, _,
+         left_COP, left_contact_force, _) = self.COP_info_filtered
+        force_target = self.total_mass * self.g / 2.0
+        # Z contact force
+        right_foot_force_err = force_target - right_contact_force[2]
+        left_foot_force_err = force_target - left_contact_force[2]
+
+        # foot roll
+        right_foot_link_state = p.getLinkState(self.robot_id,
+                                               self.joint_idx['rightAnkleRoll'],
+                                               computeLinkVelocity=0)
+        right_foot_orn = p.getEulerFromQuaternion(right_foot_link_state[1])
+        right_foot_roll_err = right_foot_orn[2]
+        left_foot_link_state = p.getLinkState(self.robot_id,
+                                              self.joint_idx['leftAnkleRoll'],
+                                              computeLinkVelocity=0)
+        left_foot_orn = p.getEulerFromQuaternion(left_foot_link_state[1])
+        left_foot_roll_err = left_foot_orn[2]
+
+        x_pos_reward = np.exp(-19.51 * x_pos_err ** 2)
+        y_pos_reward = np.exp(-19.51 * y_pos_err ** 2)
+        z_pos_reward = np.exp(-113.84 * z_pos_err ** 2)  # -79.73
+        xy_pos_reward = np.exp(-19.51 * xy_pos_err ** 2)
+
+        x_vel_reward = np.exp(-0.57 * (x_vel_err) ** 2)
+        y_vel_reward = np.exp(-0.57 * (y_vel_err) ** 2)
+        z_vel_reward = np.exp(-3.69 * (z_vel_err) ** 2)  # -1.85
+        xy_vel_reward = np.exp(-0.57 * (xy_vel_err) ** 2)
+
+        torso_pitch_reward = np.exp(-4.68 * (torso_pitch_err) ** 2)
+        torso_roll_reward = np.exp(-4.68 * (torso_roll_err) ** 2)
+        pelvis_pitch_reward = np.exp(-4.68 * (pelvis_pitch_err) ** 2)
+        pelvis_roll_reward = np.exp(-4.68 * (pelvis_roll_err) ** 2)
+
+        right_foot_force_reward = np.exp(-2e-5 * (right_foot_force_err) ** 2)
+        right_foot_roll_reward = np.exp(-4.68 * (right_foot_roll_err) ** 2)
+        left_foot_force_reward = np.exp(-2e-5 * (left_foot_force_err) ** 2)
+        left_foot_roll_reward = np.exp(-4.68 * (left_foot_roll_err) ** 2)
+
+        foot_contact_term = 0
+        if not self.is_ground_contact():  # both feet lost contact
+            foot_contact_term -= 1  # TODO increase penalty for losing contact
+
+        fall_term = 0
+        if self.is_fallen():
+            fall_term -= 10
+
+        reward = 10 * (2.0 * xy_pos_reward
+                       + 3.0 * z_pos_reward
+                       + 2.0 * xy_vel_reward
+                       + 1.0 * z_vel_reward
+                       + 1.0 * torso_pitch_reward
+                       + 1.0 * torso_roll_reward
+                       + 1.0 * pelvis_pitch_reward
+                       + 1.0 * pelvis_roll_reward
+                       + 1.0 * right_foot_force_reward
+                       + 1.0 * left_foot_force_reward
+                       # + 1.0 * right_foot_roll_reward
+                       # + 1.0 * left_foot_roll_reward
+                       )/(2.0+3.0+2.0+1.0+1.0+1.0+1.0+1.0+1.0+1.0)  # sum coefs
+        reward = reward + fall_term + foot_contact_term
+
+        ##########
+        # penalize reward when target position hard to achieve: position - actn
+        position_follow_penalty = 0
+        for joint in self.controlled_joints:  # TODO
+            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
+            position_follow_penalty -= abs(joint_state[0] - self.action[joint])
+
+        # penalize reward when joint is moving too fast: (vel / max_vel)^2
+        velocity_penalty = 0
+        for joint in self.controlled_joints:  # TODO
+            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
+            velocity_penalty -= (joint_state[1] / self.v_max[joint])**2
+
+        # penalize reward when torque: torque / max_torque
+        torque_penalty = 0
+        for joint in self.controlled_joints:  # TODO
+            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
+            torque_penalty -= abs(joint_state[3] / self.u_max[joint])
+
+        # penalize power rate of joint motor: vel/max_vel * torque/max_torque
+        power_penalty = 0
+        for joint in self.controlled_joints:  # TODO
+            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
+            power_penalty -= (abs(joint_state[3] / self.u_max[joint])
+                              * abs(joint_state[1] / self.v_max[joint]))
+
+        # penalize change in torque: torque_change / max_torque
+        torque_change_penalty = 0
+        for joint in self.controlled_joints:
+            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
+            torque_change = self.last_torque_applied[joint] - joint_state[3]
+            torque_change_penalty -= abs(torque_change / self.u_max[joint])
+
+        # reward += 2 * velocity_penalty
+        # reward += 30 * velocity_penalty/len(self.controlled_joints)
+        # reward += 30 * power_penalty / len(self.controlled_joints)
+        # reward += 5 * power_penalty
+
+        reward_term = {
+            "x_pos_reward": x_pos_reward,
+            "y_pos_reward": y_pos_reward,
+            "z_pos_reward": z_pos_reward,
+            "x_vel_reward": x_vel_reward,
+            "y_vel_reward": y_vel_reward,
+            "z_vel_reward": z_vel_reward,
+            "torso_pitch_reward": torso_pitch_reward,
+            "pelvis_pitch_reward": pelvis_pitch_reward,
+            "torso_roll_reward": torso_roll_reward,
+            "pelvis_roll_reward": pelvis_roll_reward,
+            "power_penalty": power_penalty,
+            "torque_change_penalty": torque_change_penalty,
+            "velocity_penalty": velocity_penalty,
+            "torque_penalty": torque_penalty,
+            "position_follow_penalty": position_follow_penalty,
+            "xy_pos_reward": xy_pos_reward,
+            "xy_vel_reward": xy_vel_reward,
+            "left_foot_force_reward": left_foot_force_reward,
+            "right_foot_force_reward": right_foot_force_reward,
+            "left_foot_roll_reward": left_foot_roll_reward,
+            "right_foot_roll_reward": right_foot_roll_reward,
+            "foot_contact_term": foot_contact_term,
+            "fall_term": fall_term
+        }
+        return reward, reward_term
+
+
+class ValkyrieEnvExtended(ValkyrieEnvBase):
+    """Class which methods which are nver called by basic environment"""
 
     def set_PD_position_control(self, torque_dict, u):
         """Apply torque to joints to move towards target positions given by u.
@@ -1626,32 +1563,6 @@ class ValkyrieEnv(gym.Env):
                     # positionGain=self.Kp[joint],
                     # velocityGain=self.Kd[joint],
                 )
-
-    def set_PD_velocity_control(self, torque_dict):
-        """Set the maximum motor force limit for joints.
-
-        We are using this as a form of _torque_ control, where the target
-        velocity is _always_ set to be the maximum velocity allowed, and we
-        input the maximum torque that we want to apply to reach that velocity.
-
-        When a step is taken, force (up to the limit we input) is applied to
-        reach the target velocity, where
-            target velocity = self.v_max * sign(torque).
-
-        Parameters
-        ----------
-        torque_dict : dict of {str: float}
-            joint names and the maximum torque to allow upon taking a step
-        """
-        for joint, torque in torque_dict.items():
-            p.setJointMotorControl2(
-                self.robot_id,
-                self.joint_idx[joint],
-                # set desired velocity of joint
-                targetVelocity=np.sign(torque)*self.v_max[joint],
-                # set maximum motor force that can be used
-                force=np.abs(torque),
-                controlMode=p.VELOCITY_CONTROL)
 
     def set_PD_torque_control(self, torque_dict):
         """Set exact motor force that will be applied to joints when step taken.
@@ -1756,6 +1667,20 @@ class ValkyrieEnv(gym.Env):
                              forceObj=force,
                              posObj=pos,
                              flags=p.LINK_FRAME)
+
+    def is_ground_contact_reacton_force(self, side):
+        """Return ground reaction force on given side.
+        (NOTE: don't yet understand calculation used)
+        Parameters
+        ----------
+        side : str
+            Either 'left' or 'right'
+        """
+        # TODO ground contact detection using ground reaction force
+        torque = self.joint_reaction_force(side)
+        # TODO adjust sigmoid function to represent actual contact as close
+        # as possible
+        return 1 / (1 + np.exp(-0.3 * (torque - 4)))
 
     def draw_base_frame(self):
         """Draw approximate pelvis centre of mass."""
@@ -1936,7 +1861,6 @@ class ValkyrieEnv(gym.Env):
             base_pos + right_elbow_link_dis_yaw[0],
             [1, 0, 0],
             3, 1)  # pelvis to right foot
-        return
 
     def draw_skeleton_base(self):
         # This may not be the Pelvis CoM position _exactly_ but should be fine,
@@ -2049,13 +1973,18 @@ class ValkyrieEnv(gym.Env):
                            [1, 0, 0],
                            3,
                            1)  # pelvis to right foot
-        return
+
+    def draw_COM(self):
+        p.addUserDebugLine(self.COM_pos + np.array([0, 0, 2]),
+                           self.COM_pos + np.array([0, 0, -2]),
+                           [1, 0, 0],
+                           5,
+                           0.1)  # TODO rendering to draw COM
 
     def draw_support_polygon(self):
         hull = self.hull  # 2D
         if len(hull) <= 1:
             return
-
         support_polygon_centre = np.zeros(np.shape(hull[0]))
         for i in range(len(hull)):
             if i >= len(hull) - 1:  # end point
@@ -2077,14 +2006,100 @@ class ValkyrieEnv(gym.Env):
             support_polygon_centre + np.array([0, 0, -2]),
             [0, 1, 0],
             5, 0.1)  # TODO rendering to draw COM
-        return
 
-    def draw_COM(self):
-        p.addUserDebugLine(self.COM_pos + np.array([0, 0, 2]),
-                           self.COM_pos + np.array([0, 0, -2]),
-                           [1, 0, 0],
-                           5,
-                           0.1)  # TODO rendering to draw COM
+    def get_support_polygon(self):
+        foot_ground_contact = []
+        for side in ('right', 'left'):
+            if self.is_ground_contact(side):
+                ankle_roll_contact = p.getContactPoints(
+                    self.robot_id,
+                    self.plane_id,
+                    self.joint_idx[side+'AnkleRoll'],
+                    -1)
+                ankle_pitch_contact = p.getContactPoints(
+                    self.robot_id,
+                    self.plane_id,
+                    self.joint_idx[side+'AnklePitch'],
+                    -1)
+                foot_ground_contact.extend(ankle_roll_contact)
+                foot_ground_contact.extend(ankle_pitch_contact)
+        foot_ground_contact_point = np.array(
+            [data[5] for data in foot_ground_contact])
+
+        if len(foot_ground_contact_point) < 1:
+            return np.array([[0.0, 0.0, 0.0]])
+
+        # only use x and y coordinates
+        self.contact_points = foot_ground_contact_point[:, 0:2]
+        if len(self.contact_points) >= 4:
+            hull = ConvexHull(self.contact_points)
+            self.hull = self.contact_points[hull.vertices, :]
+        else:
+            self.hull = self.contact_points
+        return self.hull
+
+    def calculate_rejectable_force(self, period):
+        """
+        Parameters
+        ----------
+        period : int
+            Impulse lasting period
+        """
+        foot_length = 0.26  # TODO check length of foot
+        # TODO check whether COM is at the centre of foot
+        V = np.array([self.target_COM_velocity(-foot_length / 2, 'x'),
+                      self.target_COM_velocity(foot_length / 2, 'x')])
+        F = V * self.total_mass / period
+        return F
+
+    def calculate_rejectable_force_xy(self, period):
+        """
+        Parameters
+        ----------
+        period : int
+            Impulse lasting period
+        """
+        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
+        base_orn = p.getEulerFromQuaternion(base_quat)
+        Rz = self.rotZ(base_orn[2])
+        Rz_i = np.linalg.inv(Rz)
+
+        hull = np.array(self.contact_points)
+        # hull = np.array(self.hull) # (i,2)
+
+        if np.shape(hull)[0] < 3:  # first axis
+            return 0, 0, 0, 0  # X max X min Y max Y min
+        hull = hull - self.COM_pos[0:2]  # support polygon hull w.r.t COM xy pos
+
+        # add z coordinate
+        hull_full = np.zeros((np.shape(hull)[0], 3))
+        hull_full[:, 0:2] = hull[:, 0:2]
+        # transform
+        # base velocity in adjusted yaw frame
+        hull_full_yaw = np.transpose(Rz_i @ hull_full.transpose())
+        hull = hull_full_yaw[:, 0:2]
+
+        x_pos = hull[:, 0]
+        y_pos = hull[:, 1]
+        x_pos_sort = np.sort(x_pos)  # small to large
+        x_min = x_pos_sort[0]
+        x_max = x_pos_sort[-1]
+        # x_min = (x_pos_sort[0]+x_pos_sort[1])/2.0
+        # x_max = (x_pos_sort[-1]+x_pos_sort[-2])/2.0
+        y_pos_sort = np.sort(y_pos)  # small to large
+        y_min = y_pos_sort[0]
+        y_max = y_pos_sort[-1]
+        # y_min = (y_pos_sort[0]+y_pos_sort[1])/2.0
+        # y_max = (y_pos_sort[-1]+y_pos_sort[-2])/2.0
+        h = self.COM_pos_local[2]  # height of COM w.r.t bottom of foot
+        z = max(0.05, h)  # Make sure denominator is not zero
+        tau = np.sqrt(z / self.g)
+        Fx_min = self.total_mass/tau*x_min/period
+        Fx_max = self.total_mass/tau*x_max/period
+        Fy_min = self.total_mass/tau*y_min/period
+        Fy_max = self.total_mass/tau*y_max/period
+
+        return Fx_min, Fx_max, Fy_min, Fy_max
 
     def test_kinematic(self):
         """NOTE: DOES NOT WORK! and I don't understadn what it's meant to do."""
@@ -2169,171 +2184,3 @@ class ValkyrieEnv(gym.Env):
             start = COM_dict[parentIdx]
             end = COM
             p.addUserDebugLine(start, end, [0, 0, 1], 1, 1)
-
-
-class ValkyrieEnvBasic(ValkyrieEnv):
-
-    def reward(self):
-        """Return reward for current state and terms used in the reward.
-
-        Returns
-        -------
-        reward : float
-        reward_term : dict
-            {name: value} of all elements summed to make the reward
-        """
-        base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
-        base_orn = p.getEulerFromQuaternion(base_quat)
-        chest_link_state = p.getLinkState(self.robot_id,
-                                          self.joint_idx['torsoRoll'],
-                                          computeLinkVelocity=1)
-        torso_roll_err, torso_pitch_err, _, _ = chest_link_state[1]
-        pelvis_roll_err, pelvis_pitch_err, _ = base_orn
-        # Nominal COM x and z position [0.0, 1.104]
-        # Nominal COM x and z position w.r.t COM of foot [0.0, 1.064] #TODO test
-
-        # filtering for reward
-        x_pos_err = 0.0 - self.COM_pos_local[0]
-        y_pos_err = 0.0 - self.COM_pos_local[1]
-        z_pos_err = 1.175 * 1.02 - self.COM_pos_local[2]
-
-        xy_pos_target = np.array([0.0, 0.0])
-        xy_pos = self.COM_pos_local[[0, 1]]
-        xy_pos_err = np.linalg.norm(xy_pos - xy_pos_target)
-
-        x_vel_err = self.target_COM_velocity(0.0, 'x') - self.COM_vel[0]
-        y_vel_err = self.target_COM_velocity(0.0, 'y') - self.COM_vel[1]
-        z_vel_err = 0.0 - self.COM_vel[2]
-
-        xy_vel_target = np.array([self.target_COM_velocity(0.0, 'x'),
-                                  self.target_COM_velocity(0.0, 'y')])
-        xy_vel = self.COM_vel[[0, 1]]
-        xy_vel_err = np.linalg.norm(xy_vel - xy_vel_target)
-
-        # force distribution
-        (COP, contact_force, _, right_COP, right_contact_force, _,
-         left_COP, left_contact_force, _) = self.COP_info_filtered
-        force_target = self.total_mass * self.g / 2.0
-        # Z contact force
-        right_foot_force_err = force_target - right_contact_force[2]
-        left_foot_force_err = force_target - left_contact_force[2]
-
-        # foot roll
-        right_foot_link_state = p.getLinkState(self.robot_id,
-                                               self.joint_idx['rightAnkleRoll'],
-                                               computeLinkVelocity=0)
-        right_foot_orn = p.getEulerFromQuaternion(right_foot_link_state[1])
-        right_foot_roll_err = right_foot_orn[2]
-        left_foot_link_state = p.getLinkState(self.robot_id,
-                                              self.joint_idx['leftAnkleRoll'],
-                                              computeLinkVelocity=0)
-        left_foot_orn = p.getEulerFromQuaternion(left_foot_link_state[1])
-        left_foot_roll_err = left_foot_orn[2]
-
-        x_pos_reward = np.exp(-19.51 * x_pos_err ** 2)
-        y_pos_reward = np.exp(-19.51 * y_pos_err ** 2)
-        z_pos_reward = np.exp(-113.84 * z_pos_err ** 2)  # -79.73
-        xy_pos_reward = np.exp(-19.51 * xy_pos_err ** 2)
-
-        x_vel_reward = np.exp(-0.57 * (x_vel_err) ** 2)
-        y_vel_reward = np.exp(-0.57 * (y_vel_err) ** 2)
-        z_vel_reward = np.exp(-3.69 * (z_vel_err) ** 2)  # -1.85
-        xy_vel_reward = np.exp(-0.57 * (xy_vel_err) ** 2)
-
-        torso_pitch_reward = np.exp(-4.68 * (torso_pitch_err) ** 2)
-        torso_roll_reward = np.exp(-4.68 * (torso_roll_err) ** 2)
-        pelvis_pitch_reward = np.exp(-4.68 * (pelvis_pitch_err) ** 2)
-        pelvis_roll_reward = np.exp(-4.68 * (pelvis_roll_err) ** 2)
-
-        right_foot_force_reward = np.exp(-2e-5 * (right_foot_force_err) ** 2)
-        right_foot_roll_reward = np.exp(-4.68 * (right_foot_roll_err) ** 2)
-        left_foot_force_reward = np.exp(-2e-5 * (left_foot_force_err) ** 2)
-        left_foot_roll_reward = np.exp(-4.68 * (left_foot_roll_err) ** 2)
-
-        foot_contact_term = 0
-        if not self.is_ground_contact():  # both feet lost contact
-            foot_contact_term -= 1  # TODO increase penalty for losing contact
-
-        fall_term = 0
-        if self.is_fallen():
-            fall_term -= 10
-
-        reward = 10 * (2.0 * xy_pos_reward
-                       + 3.0 * z_pos_reward
-                       + 2.0 * xy_vel_reward
-                       + 1.0 * z_vel_reward
-                       + 1.0 * torso_pitch_reward
-                       + 1.0 * torso_roll_reward
-                       + 1.0 * pelvis_pitch_reward
-                       + 1.0 * pelvis_roll_reward
-                       + 1.0 * right_foot_force_reward
-                       + 1.0 * left_foot_force_reward
-                       # + 1.0 * right_foot_roll_reward
-                       # + 1.0 * left_foot_roll_reward
-                       )/(2.0+3.0+2.0+1.0+1.0+1.0+1.0+1.0+1.0+1.0)  # sum coefs
-        reward = reward + fall_term + foot_contact_term
-
-        ##########
-        # penalize reward when target position hard to achieve: position - actn
-        position_follow_penalty = 0
-        for joint in self.controlled_joints:  # TODO
-            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            position_follow_penalty -= abs(joint_state[0] - self.action[joint])
-
-        # penalize reward when joint is moving too fast: (vel / max_vel)^2
-        velocity_penalty = 0
-        for joint in self.controlled_joints:  # TODO
-            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            velocity_penalty -= (joint_state[1] / self.v_max[joint])**2
-
-        # penalize reward when torque: torque / max_torque
-        torque_penalty = 0
-        for joint in self.controlled_joints:  # TODO
-            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            torque_penalty -= abs(joint_state[3] / self.u_max[joint])
-
-        # penalize power rate of joint motor: vel/max_vel * torque/max_torque
-        power_penalty = 0
-        for joint in self.controlled_joints:  # TODO
-            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            power_penalty -= (abs(joint_state[3] / self.u_max[joint])
-                              * abs(joint_state[1] / self.v_max[joint]))
-
-        # penalize change in torque: torque_change / max_torque
-        torque_change_penalty = 0
-        for joint in self.controlled_joints:
-            joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
-            torque_change = self.last_torque_applied[joint] - joint_state[3]
-            torque_change_penalty -= abs(torque_change / self.u_max[joint])
-
-        # reward += 2 * velocity_penalty
-        # reward += 30 * velocity_penalty/len(self.controlled_joints)
-        # reward += 30 * power_penalty / len(self.controlled_joints)
-        # reward += 5 * power_penalty
-
-        reward_term = {
-            "x_pos_reward": x_pos_reward,
-            "y_pos_reward": y_pos_reward,
-            "z_pos_reward": z_pos_reward,
-            "x_vel_reward": x_vel_reward,
-            "y_vel_reward": y_vel_reward,
-            "z_vel_reward": z_vel_reward,
-            "torso_pitch_reward": torso_pitch_reward,
-            "pelvis_pitch_reward": pelvis_pitch_reward,
-            "torso_roll_reward": torso_roll_reward,
-            "pelvis_roll_reward": pelvis_roll_reward,
-            "power_penalty": power_penalty,
-            "torque_change_penalty": torque_change_penalty,
-            "velocity_penalty": velocity_penalty,
-            "torque_penalty": torque_penalty,
-            "position_follow_penalty": position_follow_penalty,
-            "xy_pos_reward": xy_pos_reward,
-            "xy_vel_reward": xy_vel_reward,
-            "left_foot_force_reward": left_foot_force_reward,
-            "right_foot_force_reward": right_foot_force_reward,
-            "left_foot_roll_reward": left_foot_roll_reward,
-            "right_foot_roll_reward": right_foot_roll_reward,
-            "foot_contact_term": foot_contact_term,
-            "fall_term": fall_term
-        }
-        return reward, reward_term
