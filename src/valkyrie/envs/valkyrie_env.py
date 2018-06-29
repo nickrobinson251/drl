@@ -2216,7 +2216,7 @@ class ValkyrieEnvBasic(ValkyrieEnv):
         # filtering for reward
         x_pos_err = 0.0 - self.COM_pos_local[0]
         y_pos_err = 0.0 - self.COM_pos_local[1]
-        z_pos_err = 1.104 * 1.02 - self.COM_pos_local[2]
+        z_pos_err = 1.175 * 1.02 - self.COM_pos_local[2]
 
         xy_pos_target = np.array([0.0, 0.0])
         xy_pos = self.COM_pos_local[[0, 1]]
