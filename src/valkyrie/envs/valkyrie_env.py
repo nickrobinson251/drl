@@ -309,7 +309,7 @@ class ValkyrieEnvBase(gym.Env):
         self.Kd = Kd  # derivative gain
         self._setup_simulation(base_pos, base_orn, fixed_base)
         self.steps_taken = 0
-        self._observation = self.get_extended_observation()
+        self._observation = self.get_filtered_observation()
         return self._observation
 
     def _setup_simulation(self, base_pos, base_orn, fixed_base=False):
@@ -374,6 +374,10 @@ class ValkyrieEnvBase(gym.Env):
             joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
             self.last_torque_applied[joint] = joint_state[3]
 
+    def step_without_torque(self):
+        """Take no action: apply zero torque to all joints. For debugging."""
+        self.step(np.zeros(self.action_space.n))
+
     def step(self, action, pelvis_push_force=[0, 0, 0]):
         """Take action, get observation, reward, done (bool), info (empty)."""
         torque_dict = self.calculate_PD_torque(action)
@@ -412,7 +416,7 @@ class ValkyrieEnvBase(gym.Env):
             joint_state = p.getJointState(self.robot_id, self.joint_idx[joint])
             self.last_torque_applied[joint] = joint_state[3]
 
-        self._observation = self.get_extended_observation()  # filtered
+        self._observation = self.get_filtered_observation()  # filtered
         reward, _ = self.reward()  # balancing
         done = self.is_fallen()
         return self._observation, reward, done, {}
@@ -572,9 +576,6 @@ class ValkyrieEnvBase(gym.Env):
         observation = self.get_observation()
         for i in range(self.num_states):
             self.state_filter[i](observation[i])
-        # Binay state filter
-        # self.left_contact_filter(observation[39])
-        # self.right_contact_filter(observation[59])
 
         # TODO filtering for PD controller
         for j in self.controlled_joints:
@@ -588,219 +589,190 @@ class ValkyrieEnvBase(gym.Env):
             self.COM_pos_local_filtered[i] = self.COM_pos_local_filter[i].y[0]
 
     def get_observation(self):
-        x_observation = np.zeros((self.num_states,))
+        """return observation of current robot position.
 
+        Returns
+        -------
+        observation : numpy.ndarray shape=(self.num_states,)
+        """
+        observation = np.zeros(self.num_states)
+
+        # use calculated base COM position
+        base_pos = self.link_COM_position['pelvisBase']
         # This may not be the Pelvis CoM position _exactly_ but should be fine,
         # otherwise can apply local transformation
         _, base_quat = p.getBasePositionAndOrientation(self.robot_id)
         base_orn = p.getEulerFromQuaternion(base_quat)
         base_pos_vel, base_orn_vel = p.getBaseVelocity(self.robot_id)
 
-        # Gravitational acceleration acts as a reference for pitch and roll but
-        # not for yaw.
-
-        # use calculated base COM position
-        base_pos = self.link_COM_position['pelvisBase']
-
-        Rz = self.rotZ(base_orn[2])
-        Rz_i = np.linalg.inv(Rz)
-        # R = self.transform(base_quat)
-        # R_i = np.linalg.inv(R)
-
-        # pelvis positional velocity
-        base_pos_vel = np.array(base_pos_vel)
-        base_pos_vel.resize(1, 3)
-        # base velocity in base (pelvis) frame
-        # base_pos_vel_base = np.transpose(R_i @ base_pos_vel.transpose())
+        # Gravitational acc acts as a reference for pitch and roll but not yaw
+        yaw_rotation_matrix = self.rotZ(base_orn[2])
+        yaw_rotation_matrix_inv = np.linalg.inv(yaw_rotation_matrix)
+        # base/pelvis positional velocity in base/pelvis frame
+        base_pos_vel = np.resize(base_pos_vel, (3, 1))  # as column vector
         # base velocity in adjusted yaw frame
-        base_pos_vel_yaw = np.transpose(Rz_i @ base_pos_vel.transpose())
-        # base_pos_vel_yaw = base_pos_vel
-        x_observation[0] = base_pos_vel_yaw[0][0]  # pelvis_x_dot
-        x_observation[1] = base_pos_vel_yaw[0][1]  # pelvis_y_dot
-        x_observation[2] = base_pos_vel_yaw[0][2]  # pelvis_z_dot
-        x_observation[3] = base_orn[0]  # pelvis_roll
-        x_observation[4] = base_orn[1]  # pelvis_pitch
+        base_pos_vel_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, base_pos_vel))
+        observation[0] = base_pos_vel_yaw[0]  # pelvis_x_dot
+        observation[1] = base_pos_vel_yaw[1]  # pelvis_y_dot
+        observation[2] = base_pos_vel_yaw[2]  # pelvis_z_dot
+        observation[3] = base_orn[0]  # pelvis_roll
+        observation[4] = base_orn[1]  # pelvis_pitch
 
-        base_orn_vel = np.array(base_orn_vel)
-        base_orn_vel.resize(1, 3)
-        # base_orn_vel_base = np.transpose(R_i @ base_orn_vel.transpose())
-        base_orn_vel_yaw = np.transpose(Rz_i @ base_orn_vel.transpose())
-        x_observation[5] = base_orn_vel_yaw[0][0]  # pelvis_roll_dot
-        x_observation[6] = base_orn_vel_yaw[0][1]  # pelvis_pitch_dot
-        x_observation[7] = base_orn_vel_yaw[0][2]  # pelvis_yaw_dot
+        base_pos_vel = np.resize(base_orn_vel, (3, 1))  # as column vector
+        base_orn_vel_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, base_orn_vel))
+        observation[5] = base_orn_vel_yaw[0]  # pelvis_roll_dot
+        observation[6] = base_orn_vel_yaw[1]  # pelvis_pitch_dot
+        observation[7] = base_orn_vel_yaw[2]  # pelvis_yaw_dot
 
         # chest
         chest_link_state = p.getLinkState(
-            self.robot_id, self.joint_idx['torsoRoll'],
+            self.robot_id,
+            self.joint_idx['torsoRoll'],
             computeLinkVelocity=1)
-        chest_link_dis = np.array(chest_link_state[0]) - np.array(base_pos)
-        chest_link_dis.resize(1, 3)
-        # chest_link_dis_base = np.transpose(R_i @ chest_link_dis.transpose())
-        chest_link_dis_yaw = np.transpose(Rz_i @ chest_link_dis.transpose())
-        # chest_link_dis_yaw = chest_link_dis
-        # chest_com_position_x - pelvis_com_position_x
-        # chest_com_position_y - pelvis_com_position_y
-        # chest_com_position_z - pelvis_com_position_z
-        x_observation[8] = chest_link_dis_yaw[0][0]
-        x_observation[9] = chest_link_dis_yaw[0][1]
-        x_observation[10] = chest_link_dis_yaw[0][2]
+        chest_world_pos = np.array(chest_link_state[0])
+        chest_link_displacement = np.resize(chest_world_pos - base_pos, (3, 1))
+        chest_link_dis_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, chest_link_displacement))
+        observation[8] = chest_link_dis_yaw[0]
+        observation[9] = chest_link_dis_yaw[1]
+        observation[10] = chest_link_dis_yaw[2]
 
-        torso_pitch_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['torsoPitch'])
-        x_observation[11] = torso_pitch_joint_state[0]
-        x_observation[12] = (torso_pitch_joint_state[1]
-                             / self.v_max['torsoPitch'])
+        # torso
+        torso_pitch_pos, torso_pitch_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['torsoPitch'])
+        observation[11] = torso_pitch_pos
+        observation[12] = torso_pitch_vel / self.v_max['torsoPitch']
 
-        right_hip_roll_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['rightHipRoll'])
-        x_observation[13] = right_hip_roll_joint_state[0]  # position
-        # velocity
-        x_observation[14] = (right_hip_roll_joint_state[1]
-                             / self.v_max['rightHipRoll'])
-        right_hip_pitch_joint_state = p.getJointState(
+        # right side: pitch and roll for hip, knee, ankle, plus ankle yaw
+        right_hip_roll_pos, right_hip_roll_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['rightHipRoll'])
+        observation[13] = right_hip_roll_pos
+        observation[14] = right_hip_roll_vel / self.v_max['rightHipRoll']
+
+        right_hip_pitch_pos, right_hip_pitch_vel, _, _ = p.getJointState(
             self.robot_id, self.joint_idx['rightHipPitch'])
-        x_observation[15] = right_hip_pitch_joint_state[0]  # position
-        # velocity
-        x_observation[16] = (right_hip_pitch_joint_state[1]
-                             / self.v_max['rightHipPitch'])
-        right_knee_pitch_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['rightKneePitch'])
-        x_observation[17] = right_knee_pitch_joint_state[0]  # position
-        # velocity
-        x_observation[18] = (right_knee_pitch_joint_state[1]
-                             / self.v_max['rightKneePitch'])
-        right_ankle_pitch_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['rightAnklePitch'])
-        x_observation[19] = right_ankle_pitch_joint_state[0]
-        x_observation[20] = (right_ankle_pitch_joint_state[1]
-                             / self.v_max['rightAnklePitch'])
-        right_ankle_roll_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['rightAnkleRoll'])
-        x_observation[21] = right_ankle_roll_joint_state[0]
-        x_observation[22] = (right_ankle_roll_joint_state[1]
-                             / self.v_max['rightAnkleRoll'])
+        observation[15] = right_hip_pitch_pos
+        observation[16] = right_hip_pitch_vel / self.v_max['rightHipPitch']
+
+        right_knee_pitch_pos, right_knee_pitch_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['rightKneePitch'])
+        observation[17] = right_knee_pitch_pos
+        observation[18] = right_knee_pitch_vel / self.v_max['rightKneePitch']
+
+        right_ankle_pitch_pos, right_ankle_pitch_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['rightAnklePitch'])
+        observation[19] = right_ankle_pitch_pos
+        observation[20] = right_ankle_pitch_vel/self.v_max['rightAnklePitch']
+
+        right_ankle_roll_pos, right_ankle_roll_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['rightAnkleRoll'])
+        observation[21] = right_ankle_roll_pos
+        observation[22] = right_ankle_roll_vel / self.v_max['rightAnkleRoll']
 
         right_foot_link_state = p.getLinkState(
-            self.robot_id, self.joint_idx['rightAnkleRoll'],
+            self.robot_id,
+            self.joint_idx['rightAnkleRoll'],
             computeLinkVelocity=0)
-        right_foot_link_dis = np.array(right_foot_link_state[0]) - base_pos
-        right_foot_link_dis.resize(1, 3)
-        # right_foot_link_dis_base = np.transpose(
-        #     R_i @right_foot_link_dis.transpose())
-        right_foot_link_dis_yaw = np.transpose(
-            Rz_i @right_foot_link_dis.transpose())
-        # right_foot_link_dis_yaw = right_foot_link_dis
-        # foot_com_position_x - pelvis_com_position_x
-        # foot_com_position_y - pelvis_com_position_y
-        # foot_com_position_z - pelvis_com_position_z
-        x_observation[23] = right_foot_link_dis_yaw[0][0]
-        x_observation[24] = right_foot_link_dis_yaw[0][1]
-        x_observation[25] = right_foot_link_dis_yaw[0][2]
+        right_foot_world_pos = np.array(right_foot_link_state[0])
+        right_foot_displacement = np.resize(right_foot_world_pos - base_pos,
+                                            (3, 1))
+        right_foot_link_dis_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, right_foot_displacement))
+        observation[23] = right_foot_link_dis_yaw[0]
+        observation[24] = right_foot_link_dis_yaw[1]
+        observation[25] = right_foot_link_dis_yaw[2]
 
-        left_hip_roll_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['leftHipRoll'])
-        x_observation[26] = left_hip_roll_joint_state[0]  # position
-        # velocity
-        x_observation[27] = (left_hip_roll_joint_state[1]
-                             / self.v_max['leftHipRoll'])
-        left_hip_pitch_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['leftHipPitch'])
-        x_observation[28] = left_hip_pitch_joint_state[0]  # position
-        # velocity
-        x_observation[29] = (left_hip_pitch_joint_state[1]
-                             / self.v_max['leftHipPitch'])
-        left_knee_pitch_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['leftKneePitch'])
-        x_observation[30] = left_knee_pitch_joint_state[0]  # position
-        # velocity
-        x_observation[31] = (left_knee_pitch_joint_state[1]
-                             / self.v_max['leftKneePitch'])
-        left_ankle_pitch_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['leftAnklePitch'])
-        x_observation[32] = left_ankle_pitch_joint_state[0]
-        x_observation[33] = (left_ankle_pitch_joint_state[1]
-                             / self.v_max['leftAnklePitch'])
-        left_ankle_roll_joint_state = p.getJointState(
-            self.robot_id, self.joint_idx['leftAnkleRoll'])
-        x_observation[34] = left_ankle_roll_joint_state[0]
-        x_observation[35] = (left_ankle_roll_joint_state[1]
-                             / self.v_max['leftAnkleRoll'])
+        # left side: pitch and roll for hip, knee, ankle, plus ankle yaw
+        left_hip_roll_pos, left_hip_roll_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['leftHipRoll'])
+        observation[26] = left_hip_roll_pos
+        observation[27] = left_hip_roll_vel / self.v_max['leftHipRoll']
+
+        left_hip_pitch_pos, left_hip_pitch_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['leftHipPitch'])
+        observation[28] = left_hip_pitch_pos
+        observation[29] = left_hip_pitch_vel / self.v_max['leftHipPitch']
+
+        left_knee_pitch_pos, left_knee_pitch_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['leftKneePitch'])
+        observation[30] = left_knee_pitch_pos
+        observation[31] = left_knee_pitch_vel / self.v_max['leftKneePitch']
+
+        left_ankle_pitch_pos, left_ankle_pitch_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['leftAnklePitch'])
+        observation[32] = left_ankle_pitch_pos
+        observation[33] = left_ankle_pitch_vel / self.v_max['leftAnklePitch']
+
+        left_ankle_roll_pos, left_ankle_roll_vel, _, _ = p.getJointState(
+            self.robot_id,
+            self.joint_idx['leftAnkleRoll'])
+        observation[34] = left_ankle_roll_pos
+        observation[35] = left_ankle_roll_vel / self.v_max['leftAnkleRoll']
 
         left_foot_link_state = p.getLinkState(
-            self.robot_id, self.joint_idx['leftAnkleRoll'],
+            self.robot_id,
+            self.joint_idx['leftAnkleRoll'],
             computeLinkVelocity=0)
-        left_foot_link_dis = np.array(left_foot_link_state[0]) - base_pos
-        left_foot_link_dis.resize(1, 3)
-        # left_foot_link_dis_base = np.transpose(
-        #     R_i @left_foot_link_dis.transpose())
-        left_foot_link_dis_yaw = np.transpose(
-            Rz_i @left_foot_link_dis.transpose())
-        # left_foot_link_dis_yaw = left_foot_link_dis
-        # foot_com_position_x - pelvis_com_position_x
-        # foot_com_position_y - pelvis_com_position_y
-        # foot_com_position_z - pelvis_com_position_z
-        x_observation[36] = left_foot_link_dis_yaw[0][0]
-        x_observation[37] = left_foot_link_dis_yaw[0][1]
-        x_observation[38] = left_foot_link_dis_yaw[0][2]
+        left_foot_world_pos = np.array(left_foot_link_state[0])
+        left_foot_displacement = np.resize(left_foot_world_pos - base_pos,
+                                           (3, 1))
+        left_foot_link_dis_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, left_foot_displacement))
+        observation[36] = left_foot_link_dis_yaw[0]
+        observation[37] = left_foot_link_dis_yaw[1]
+        observation[38] = left_foot_link_dis_yaw[2]
 
-        COM_dis = np.array(self.COM_pos-np.array(base_pos))
-        COM_dis.resize(1, 3)
-        # COM_dis_base = np.transpose(R_i @ COM_dis.transpose())
-        COM_dis_yaw = np.transpose(Rz_i @ COM_dis.transpose())
-        # COM_dis_yaw = COM_dis
-        x_observation[39] = COM_dis_yaw[0][0]
-        x_observation[40] = COM_dis_yaw[0][1]
-        x_observation[41] = COM_dis_yaw[0][2]
+        # COM
+        COM_displacement = np.resize(self.COM_pos - base_pos, (3, 1))
+        COM_dis_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, COM_displacement))
+        observation[39] = COM_dis_yaw[0]
+        observation[40] = COM_dis_yaw[1]
+        observation[41] = COM_dis_yaw[2]
 
-        cp = self.get_capture_point()
-        cp_dis = cp+COM_dis  # capture point w.r.t pelvis TODO
-        cp_dis.resize(1, 3)
-        # cp_dis_base = np.transpose(R_i @ cp_dis.transpose())
-        cp_dis_yaw = np.transpose(Rz_i @ cp_dis.transpose())
-        # cp_dis_yaw = cp_dis
-        x_observation[42] = cp_dis_yaw[0][0]
-        x_observation[43] = cp_dis_yaw[0][1]
-        # x_observation[57] = cp_yaw[2]
+        capture_point = self.get_capture_point()
+        capture_point_displacement = np.resize(
+            capture_point + np.ravel(COM_displacement), (3, 1))
+        capture_point_dis_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, capture_point_displacement))
+        observation[42] = capture_point_dis_yaw[0]
+        observation[43] = capture_point_dis_yaw[1]
 
-        COM_vel = np.array(self.COM_vel)
-        COM_vel.resize(1, 3)
-        # COM_vel_base = np.transpose(R_i @ COM_vel.transpose())
-        COM_vel_yaw = np.transpose(Rz_i @ COM_vel.transpose())
-        # COM_vel_yaw = COM_vel
-        x_observation[44] = COM_vel_yaw[0][0]
-        x_observation[45] = COM_vel_yaw[0][1]
-        x_observation[46] = COM_vel_yaw[0][2]
+        COM_vel = np.resize(self.COM_vel, (3, 1))
+        COM_vel_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, COM_vel))
+        observation[44] = COM_vel_yaw[0]
+        observation[45] = COM_vel_yaw[1]
+        observation[46] = COM_vel_yaw[2]
 
+        # COP
         (COP, contact_force, _, right_COP, right_contact_force, _, left_COP,
          left_contact_force, _) = self.COP_info_filtered
-        COP_dis = np.array(COP) - np.array(base_pos)
-        COP_dis.resize(1, 3)
-        # COP_dis_base = np.transpose(R_i @ COP_dis.transpose())
-        COP_dis_yaw = np.transpose(Rz_i @ COP_dis.transpose())
-        # COP_dis_yaw  =COP_dis
-        x_observation[47] = COP_dis_yaw[0][0]
-        x_observation[48] = COP_dis_yaw[0][1]
-        # x_observation[57] = COP_dis_yaw[2]
-
-        x_observation[49] = right_contact_force[2]/800.0
-        x_observation[50] = left_contact_force[2]/800.0
-
-        return x_observation
-
-    def get_extended_observation(self):
-        """Same as get_filtered_observation() method."""
-        return self.get_filtered_observation()
+        COP_displacement = np.resize(COP - base_pos, (3, 1))
+        COP_dis_yaw = np.ravel(
+            np.dot(yaw_rotation_matrix_inv, COP_displacement))
+        observation[47] = COP_dis_yaw[0]
+        observation[48] = COP_dis_yaw[1]
+        observation[49] = right_contact_force[2] / 800.0
+        observation[50] = left_contact_force[2] / 800.0
+        return observation
 
     def get_filtered_observation(self):
-        observation = self.get_observation()
-        observation_filtered = np.zeros(np.size(observation))
+        """Return the filtered observation assuming perform_filtering run."""
+        observation_filtered = np.zeros(self.num_states)
         for i in range(self.num_states):
             observation_filtered[i] = self.state_filter[i].y[0]
-        # TODO binary values should not be filtered.
-        # observation_filtered[48] = observation[48]
-        # observation_filtered[49] = observation[49]
-        # observation_filtered[39]=self.left_contact_filter.y
-        # observation_filtered[59]=self.right_contact_filter.y
         return observation_filtered
 
     def calculate_COM_position(self):
@@ -808,9 +780,9 @@ class ValkyrieEnvBase(gym.Env):
         # update global COM position
         summ = np.zeros(3)
         for link, mass in self.link_masses.items():
-            summ += np.array(self.link_COM_position[link]) * mass
+            summ += self.link_COM_position[link] * mass
         summ /= self.total_mass
-        self.COM_pos = summ
+        self.COM_pos = np.array(summ)
 
         # update local COM position w.r.t centre of support polygon
         right_foot_info = p.getLinkState(
@@ -855,7 +827,7 @@ class ValkyrieEnvBase(gym.Env):
         self.link_COM_velocity["pelvisBase"] = base_pos_vel
         for joint, idx in self.joint_idx.items():
             info = p.getLinkState(self.robot_id, idx, computeLinkVelocity=1)
-            self.link_COM_velocity[joint] = info[6]
+            self.link_COM_velocity[joint] = np.array(info[6])
         return self.link_COM_velocity
 
     def calculate_link_COM_position(self):
@@ -866,7 +838,7 @@ class ValkyrieEnvBase(gym.Env):
         self.link_COM_position["pelvisBase"] = np.array(base_pos)
         for joint, idx in self.joint_idx.items():
             info = p.getLinkState(self.robot_id, idx)
-            self.link_COM_position[joint] = info[0]
+            self.link_COM_position[joint] = np.array(info[0])
         return self.link_COM_position
 
     def calculate_link_masses(self):
@@ -1772,7 +1744,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         # base_pos = self.link_COM_position['pelvisBase']
 
         Rz = self.rotZ(base_orn[2])
-        Rz_i = np.linalg.inv(Rz)
+        yaw_rotation_matrix_inv = np.linalg.inv(Rz)
         # R = self.transform(base_quat)
         # R_i = np.linalg.inv(R)
 
@@ -1783,7 +1755,8 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         chest_link_dis = np.array(chest_link_state[0]) - np.array(base_pos)
         chest_link_dis.resize(1, 3)
         # chest_link_dis_base = np.transpose(R_i @ chest_link_dis.transpose())
-        chest_link_dis_yaw = np.transpose(Rz_i @ chest_link_dis.transpose())
+        chest_link_dis_yaw = np.transpose(
+            yaw_rotation_matrix_inv @ chest_link_dis.transpose())
 
         left_foot_link_state = p.getLinkState(
             self.robot_id, self.joint_idx['leftAnkleRoll'],
@@ -1793,7 +1766,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         # left_foot_link_dis_base = np.transpose(
         #     R_i @left_foot_link_dis.transpose())
         left_foot_link_dis_yaw = np.transpose(
-            Rz_i @left_foot_link_dis.transpose())
+            yaw_rotation_matrix_inv @left_foot_link_dis.transpose())
         # left_foot_link_dis_yaw = left_foot_link_dis
 
         right_foot_link_state = p.getLinkState(
@@ -1804,7 +1777,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         # right_foot_link_dis_base = np.transpose(
         #    R_i @right_foot_link_dis.transpose())
         right_foot_link_dis_yaw = np.transpose(
-            Rz_i @right_foot_link_dis.transpose())
+            yaw_rotation_matrix_inv @right_foot_link_dis.transpose())
         # right_foot_link_dis_yaw = right_foot_link_dis
 
         left_elbow_link_state = p.getLinkState(
@@ -1815,7 +1788,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         # left_elbow_link_dis_base = np.transpose(
         #     R_i @left_elbow_link_dis.transpose())
         left_elbow_link_dis_yaw = np.transpose(
-            Rz_i @left_elbow_link_dis.transpose())
+            yaw_rotation_matrix_inv @left_elbow_link_dis.transpose())
 
         right_elbow_link_state = p.getLinkState(
             self.robot_id, self.joint_idx['rightElbowPitch'],
@@ -1825,14 +1798,14 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         # right_elbow_link_dis_base = np.transpose(
         #     R_i @right_elbow_link_dis.transpose())
         right_elbow_link_dis_yaw = np.transpose(
-            Rz_i @right_elbow_link_dis.transpose())
+            yaw_rotation_matrix_inv @right_elbow_link_dis.transpose())
 
         base_pos[0] = 1
         base_pos[1] = 0
 
         orientation = np.array([[0.5, 0, 0]])
         # orientation_base = np.transpose(R_i @ orientation.transpose())
-        # np.transpose(Rz_i @ orientation.transpose())
+        # np.transpose(yaw_rotation_matrix_inv @ orientation.transpose())
         orientation_yaw = orientation
 
         p.addUserDebugLine(
@@ -1878,7 +1851,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         base_pos[2] = self.link_COM_position['pelvisBase'][2]
 
         # Rz = self.rotZ(base_orn[2])
-        # Rz_i = np.linalg.inv(Rz)
+        # yaw_rotation_matrix_inv = np.linalg.inv(Rz)
         R = self.transform(base_quat)
         R_i = np.linalg.inv(R)
 
@@ -1889,7 +1862,6 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         chest_link_dis = np.array(chest_link_state[0]) - np.array(base_pos)
         chest_link_dis.resize(1, 3)
         chest_link_dis_base = np.transpose(R_i @ chest_link_dis.transpose())
-        # chest_link_dis_yaw = np.transpose(Rz_i @ chest_link_dis.transpose())
 
         left_foot_link_state = p.getLinkState(self.robot_id,
                                               self.joint_idx['leftAnkleRoll'],
@@ -1899,7 +1871,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         left_foot_link_dis_base = np.transpose(
             R_i @left_foot_link_dis.transpose())
         # left_foot_link_dis_yaw = np.transpose(
-        #     Rz_i @left_foot_link_dis.transpose())
+        #     yaw_rotation_matrix_inv @left_foot_link_dis.transpose())
         # left_foot_link_dis_yaw = left_foot_link_dis
 
         right_foot_link_state = p.getLinkState(self.robot_id,
@@ -1910,7 +1882,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         right_foot_link_dis_base = np.transpose(
             R_i @right_foot_link_dis.transpose())
         # right_foot_link_dis_yaw = np.transpose(
-        #     Rz_i @right_foot_link_dis.transpose())
+        #     yaw_rotation_matrix_inv @right_foot_link_dis.transpose())
         # right_foot_link_dis_yaw = right_foot_link_dis
 
         left_elbow_link_state = p.getLinkState(self.robot_id,
@@ -1921,7 +1893,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         left_elbow_link_dis_base = np.transpose(
             R_i @left_elbow_link_dis.transpose())
         # left_elbow_link_dis_yaw = np.transpose(
-        #     Rz_i @left_elbow_link_dis.transpose())
+        #     yaw_rotation_matrix_inv @left_elbow_link_dis.transpose())
 
         right_elbow_link_state = p.getLinkState(
             self.robot_id, self.joint_idx['rightElbowPitch'],
@@ -1931,7 +1903,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         right_elbow_link_dis_base = np.transpose(
             R_i @right_elbow_link_dis.transpose())
         # right_elbow_link_dis_yaw = np.transpose(
-        #     Rz_i @right_elbow_link_dis.transpose())
+        #     yaw_rotation_matrix_inv @right_elbow_link_dis.transpose())
 
         base_pos[0] = 1
         base_pos[1] = 0
@@ -1940,7 +1912,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         orientation = np.array([[0.5, 0, 0]])
         # np.transpose(R_i @ orientation.transpose())
         orientation_base = orientation
-        # np.transpose(Rz_i @ orientation.transpose())
+        # np.transpose(yaw_rotation_matrix_inv @ orientation.transpose())
         # orientation_yaw = orientation
 
         p.addUserDebugLine(base_pos,
@@ -2062,7 +2034,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         base_pos, base_quat = p.getBasePositionAndOrientation(self.robot_id)
         base_orn = p.getEulerFromQuaternion(base_quat)
         Rz = self.rotZ(base_orn[2])
-        Rz_i = np.linalg.inv(Rz)
+        yaw_rotation_matrix_inv = np.linalg.inv(Rz)
 
         hull = np.array(self.contact_points)
         # hull = np.array(self.hull) # (i,2)
@@ -2076,7 +2048,8 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
         hull_full[:, 0:2] = hull[:, 0:2]
         # transform
         # base velocity in adjusted yaw frame
-        hull_full_yaw = np.transpose(Rz_i @ hull_full.transpose())
+        hull_full_yaw = np.transpose(
+            yaw_rotation_matrix_inv @ hull_full.transpose())
         hull = hull_full_yaw[:, 0:2]
 
         x_pos = hull[:, 0]
@@ -2113,7 +2086,7 @@ class ValkyrieEnvExtended(ValkyrieEnvBase):
 
         # base_pos = self.link_COM_position['pelvisBase']
         # Rz = self.rotZ(base_orn[2])
-        # Rz_i = np.linalg.inv(Rz)
+        # yaw_rotation_matrix_inv = np.linalg.inv(Rz)
 
         T_dict = dict()
         joint_pos_dict = dict()

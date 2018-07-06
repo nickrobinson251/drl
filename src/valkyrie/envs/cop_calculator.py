@@ -91,7 +91,7 @@ class COPCalculator():
             contact_normal = -contact_normal
             contact_normal_force = np.array(contact_info[i][9])
             contact_position = np.array(contact_info[i][5])  # position on plane
-            force = np.array(contact_normal) * contact_normal_force
+            force = contact_normal * contact_normal_force
             # integration of contact point times vertical force
             COP = contact_position * force[2]
         if force[2] != 0:
