@@ -88,7 +88,8 @@ class TwoRoomGridEnv():
                           / self.grid.size) - 1.
         action_normalised = ((action - np.mean(self.actions))
                              / np.max(self.actions))
-        return np.array([location, action_normalised, reward])
+        self.observation = np.array([location, action_normalised, reward])
+        return self.observation
 
     def step(self, action):
         """Return next observation, reward, done, and info on success."""
@@ -153,7 +154,8 @@ class TwoRoomGridEnv():
         action = 0
         reward = 0.0
         self.episode_total_reward = reward
-        return self.normalise_observation(self.location, action, reward)
+        obs = self.normalise_observation(self.location, action, reward)
+        return obs
 
     def close(self):
         if self.viewer:
