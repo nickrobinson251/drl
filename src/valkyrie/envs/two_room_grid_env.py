@@ -83,10 +83,10 @@ class TwoRoomGridEnv():
         room_row_coords = np.arange(1, self.grid_shape[0]-1)
         agent_row = self.np_random.choice(room_row_coords)
         target_row = self.np_random.choice(room_row_coords)
-        col_coords = [[1, 2], [-3, -2]]
+        col_coords = np.array([[1, 2], [-3, -2]])
         room_a, room_b = self.np_random.permutation([0, 1])
         if target_room == "any":
-            col_coords = np.flatten(col_coords)
+            col_coords = col_coords.flatten()
             agent_col = self.np_random.choice(col_coords)
             target_col = self.np_random.choice(col_coords)
         elif target_room == "other":
@@ -205,7 +205,7 @@ class TwoRoomGridEnv():
         return (255*observation).astype(np.uint8)
 
     def render(self, mode='human', close=False):
-        """Vvisualise the environment according to specification."""
+        """Visualise the environment according to specification."""
         if close:
             plt.close(1)  # Final plot
             return
