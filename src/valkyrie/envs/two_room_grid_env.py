@@ -30,7 +30,7 @@ RIGHT = 4
 class TwoRoomGridEnv():
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self):
+    def __init__(self, target_room="any"):
         self.seed()
         self.actions = [NOOP, DOWN, UP, LEFT, RIGHT]
         self.inv_actions = [0, 2, 1, 4, 3]
@@ -45,21 +45,20 @@ class TwoRoomGridEnv():
 
         # initialise env with random initial and target locations
         self.initial_grid = np.array([
-            [0, 0, 1, 1, 1, 0, 0],
-            [0, 0, 1, 1, 1, 0, 0],
-            [0, 0, 1, 1, 1, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 1, 1, 1, 0, 0],
-            [0, 0, 1, 1, 1, 0, 0],
-            [0, 0, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         ], dtype=int)
         self.grid_shape = self.initial_grid.shape
-        room_row_coords = np.arange(self.grid_shape[0])
-        room_col_coords = np.array([0, 1, -2, -1])
-        self.target_location = (self.np_random.choice(room_row_coords),
-                                self.np_random.choice(room_col_coords))
-        self.initial_location = (self.np_random.choice(room_row_coords),
-                                 self.np_random.choice(room_col_coords))
+        self.initial_location, self.target_location = \
+            self._get_agent_and_target_locations(target_room)
         self.initial_grid[self.target_location] = TARGET
         self.initial_grid[self.initial_location] = AGENT
         self.grid = copy.deepcopy(self.initial_grid)
@@ -72,6 +71,34 @@ class TwoRoomGridEnv():
         self.episode_total_reward = 0.0
         self.restart_once_done = False
         self.viewer = None
+
+    def _get_agent_and_target_locations(self, target_room):
+        """Return the coordinates of the agent and target.
+
+        Parameters
+        ----------
+        target_room : str ("any", "same" or "other")
+            Room of target relative to room of agent
+        """
+        room_row_coords = np.arange(1, self.grid_shape[0]-1)
+        agent_row = self.np_random.choice(room_row_coords)
+        target_row = self.np_random.choice(room_row_coords)
+        col_coords = [[1, 2], [-3, -2]]
+        room_a, room_b = self.np_random.permutation([0, 1])
+        if target_room == "any":
+            col_coords = np.flatten(col_coords)
+            agent_col = self.np_random.choice(col_coords)
+            target_col = self.np_random.choice(col_coords)
+        elif target_room == "other":
+            agent_col = self.np_random.choice(col_coords[room_a])
+            target_col = self.np_random.choice(col_coords[room_b])
+        elif target_room == "same":
+            agent_col = self.np_random.choice(col_coords[room_a])
+            target_col = self.np_random.choice(col_coords[room_a])
+        else:
+            raise ValueError("target_room must be 'any', 'same', or 'other'. "
+                             "Got target_room='{}'".format(target_room))
+        return (agent_row, agent_col), (target_row, target_col)
 
     def seed(self, seed=None):
         """Fix seed for reproducibility."""
