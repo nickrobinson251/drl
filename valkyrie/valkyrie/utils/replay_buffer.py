@@ -21,7 +21,7 @@ class ReplayBuffer(object):
 
     Methods
     -------
-    add(state, action, reward, next_state, done)
+    add(observation, action, reward, next_observation, done)
     random_batch(batch_size)
     clear()
     load(direcotry, verbose=False)
@@ -36,25 +36,25 @@ class ReplayBuffer(object):
         self.contents = deque(maxlen=size)
         self._Experience = namedtuple(
             "Experience",
-            ["state", "action", "reward", "next_state", "done"])
+            ["observation", "action", "reward", "next_observation", "done"])
 
-    def add(self, state, action, reward, next_state, done):
+    def add_sample(self, observation, action, reward, next_observation, done):
         """Add an experience to the replay buffer.
 
         Parameters
         ----------
-        state
+        observation
         action
         reward : float
-        next_state
+        next_observation
         done : bool
         """
         self.contents.append(
             self._Experience(
-                state=state,
+                observation=observation,
                 action=action,
                 reward=reward,
-                next_state=next_state,
+                next_observation=next_observation,
                 done=done))
 
     def random_batch(self, batch_size):
