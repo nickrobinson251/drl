@@ -12,31 +12,43 @@ from valkyrie.envs.valkyrie_env import ValkyrieEnv
 START_TIME = datetime.now().strftime('%Y_%m_%d_%H.%M.%S')
 DIR_PATH = './record/3D/' + START_TIME
 
+
+def normalise_observation(agent, state):
+    state_norm = agent.ob_normalize1.normalize(
+        np.asarray(state))
+    # reshape intp(?,)
+    return state_norm.reshape(agent.state_dim)
+
+
+def compute_disturbance_force(config):
+    """Return force in x, y, z directions."""
+    f = np.random.normal(0, 0.2) * 60*config['env']['HLC-frequency']
+    theta = np.random.uniform(-np.pi, np.pi)
+    fx = f * np.cos(theta)
+    fy = f * np.sin(theta)
+    return [fx, fy, 0]
+
+
 def main():
     BEST_REWARD = 0
-
-    pd_frequency = config['env']['LLC-frequency']
-    physics_frequency = config['env']['physics-frequency']
     network_frequency = config['env']['HLC-frequency']
-    max_train_time = config['train']['max-time']
-    max_train_steps = int(max_train_time * network_frequency)
-    max_test_time = config['test']['max-time']
-    max_test_steps = int(max_test_time * network_frequency)
-    reward_decay = 1.0
+    sampling_skip = int(config['env']['physics-frequency'] / network_frequency)
     reward_scale = config['train']['reward-scale']
-    sampling_skip = int(pd_frequency / network_frequency)
     episode_steps_lim = config['train']['num-episode-steps']
+    max_train_steps = int(config['train']['max-time'] * network_frequency)
+    max_test_steps = int(config['test']['max-time'] * network_frequency)
+    reward_decay = 1.0
 
     env = ValkyrieEnv(
-        max_time=max_train_time,
-        renders=False,
-        initial_gap_time=1,
-        pd_freq=pd_frequency,
-        physics_freq=physics_frequency,
-        Kp=config['env']['Kp'],
         Kd=config['env']['Kd'],
+        Kp=config['env']['Kp'],
         bullet_default_pd=config['env']['use-bullet-default-PD'],
-        controlled_joints_list=config['env']['controlled-joints'])
+        controlled_joints_list=config['env']['controlled-joints'],
+        initial_gap_time=1,
+        max_time=config['train']['max-time'],
+        pd_freq=config['env']['LLC-frequency'],
+        physics_freq=config['env']['physics-frequency'],
+        renders=False)
     config['env']['state-dim'] = env.state_space
     agent = DDPG(env, config)
 
@@ -65,31 +77,26 @@ def main():
         state = env.reset(Kp=config['env']['Kp'], Kd=config['env']['Kd'])
 
         # Train
-        # 4 dimension output of actor network, hip, knee, waist, ankle
-        action = np.zeros((len(config['actor']['action-joints']),))
-        control_action = np.zeros((len(config['env']['controlled-joints']),))
-        next_state, reward, done, _ = env.episode_steps(control_action)
-        # next_state = Valkyrie.getExtendedObservation()
+        # 4 dimension output of actor network: hip, knee, waist, ankle
+        action = np.zeros(len(config['actor']['action-joints']))
+        control_action = np.zeros(len(config['env']['controlled-joints']))
+        next_state, reward, done, _ = env.step(control_action)
         agent.reset()
 
         episode_steps = 0
         while True:  # infinite loop
             rollout = 0
-            for rollout in range(config['train']['num-rollout-episode_stepss']):
+            for rollout in range(config['train']['num-rollout-steps']):
                 episode_steps += 1
                 total_steps += 1
                 prev_action = np.array(action)
+
                 # update action
                 state = env.get_extended_observation()
                 if agent.config['train']['normalize-observations']:
-                    state_norm = agent.ob_normalize1.normalize(
-                        np.asarray(state))
-                    state_norm = np.reshape(
-                        state_norm, (agent.state_dim))  # reshape intp(?,)
-                else:
-                    state_norm = state
-                action = agent.action_noise(state_norm)
-                reward_add = 0
+                    state = normalise_observation(agent, state)
+                action = agent.action_noise(state)
+
                 if config['env']['use-joint-interpolation']:
                     # setup joint interpolation
                     for i, joint in enumerate(config['actor']['action-joints']):
@@ -100,25 +107,22 @@ def main():
                             0,
                             1.0 / float(network_frequency))
 
-                if external_force_disturbance:
+                if config['env']['is-external-force-disturbance']:
                     if (episode_steps == network_frequency or
                         episode_steps == network_frequency * 6 or
                             episode_steps == network_frequency * 11):
                         # apply force for every 5 second
-                        f = np.random.normal(0, 0.2) * 600*network_frequency/10
-                        theta = np.random.uniform(-np.pi, np.pi)
-                        fx = f * np.cos(theta)
-                        fy = f * np.sin(theta)
-                        force = [fx, fy, 0]
+                        force = compute_disturbance_force(config)
                 else:
                     force = [0, 0, 0]
 
+                reward_accumulation = 0
                 for i in range(sampling_skip):
                     if config['env']['use-joint-interpolation']:
                         for i, joint in enumerate(
                                 config['actor']['action-joints']):
                             action[i] = joint_interpolate[joint].interpolate(
-                                1.0 / pd_frequency)
+                                1.0 / config['env']['LLC-frequency'])
 
                     if len(control_action) == 7 and len(action) == 4:
                         control_action[0:4] = action
@@ -160,12 +164,12 @@ def main():
                     elif len(control_action) == 13 and len(action) == 13:
                         control_action[:] = action[:]
 
-                    next_state, reward, done, _ = env.episode_steps(
-                        control_action,
-                        force)
-                    reward_add = reward + reward_decay * reward_add
+                    next_state, reward, done, _ = env.step(
+                        control_action, force)
+                    reward_accumulation *= reward_decay
+                    reward_accumulation += reward
 
-                reward = reward_add * reward_scale  # /sampling_skip
+                reward = reward_accumulation * reward_scale  # /sampling_skip
                 reward -= (abs(prev_action[0] - action[0])
                            + abs(prev_action[1] - action[1])
                            + abs(prev_action[2] - action[2])
@@ -177,42 +181,32 @@ def main():
                 if done or (episode_steps > max_train_steps):
                     break
 
-            train_step = min(
-                rollout+1,
-                config['train']['train-episode_steps-num'])
+            train_step = min(rollout+1, config['train']['num-episode-steps'])
             for train in range(train_step):
                 loss = agent.perceive()
                 logging.add_train('critic_loss', loss)
-
             if done or (episode_steps > max_train_steps):
                 break
 
-        if episode == 1 or(
-                episode % 10 == 0 and total_steps >
-                config['replay']['record-start-size']):
+        if episode == 1 or (
+            episode % 10 == 0 and
+                total_steps > config['replay']['record-start-size']):
             total_reward = 0
             for i in range(config['test']['num-episodes']):
-                _ = env.reset(Kp=config['env']['Kp'], Kd=config['env']['Kd'])
+                env.reset(Kp=config['env']['Kp'], Kd=config['env']['Kd'])
 
                 # 4 dimension output of actor network, hip, knee, waist, ankle
                 action = np.zeros((len(config['actor']['action-joints']),))
                 control_action = np.zeros(
                     (len(config['env']['controlled-joints']),))
-                state, reward, done, _ = env._step(control_action)
+                state, reward, done, _ = env.step(control_action)
 
                 for j in range(max_test_steps):
                     prev_action = np.array(action)
                     state = env.getExtendedObservation()
                     if agent.config['train']['normalize-observations']:
-                        state_norm = agent.ob_normalize1.normalize(np.asarray(
-                                                                       state))
-                        state_norm = np.reshape(
-                            state_norm, (agent.state_dim))  # reshape intp(?,)
-                    else:
-                        state_norm = state
-                    action = agent.action(state_norm)  # direct action for test
-                    # action = np.clip(action,action_bounds[0],
-                    #                  action_bounds[1])
+                        state = normalise_observation(agent, state)
+                    action = agent.action(state)  # direct action for test
 
                     reward_add = 0
                     if config['env']['joint-interpolation']:
@@ -226,7 +220,7 @@ def main():
                                 0,
                                 1.0 / float(network_frequency))
 
-                    if external_force_disturbance:
+                    if config['env']['is-external-force-disturbance']:
                         f = env.rejectableForce_xy(1.0/network_frequency)
 
                         if j == 5 * network_frequency:
@@ -271,7 +265,7 @@ def main():
                                     len(config['actor']['action-joints'])):
                                 joint_name = config['actor']['action-joints'][n]
                                 action[n] = joint_interpolate[joint_name].interpolate(
-                                    1.0 / pd_frequency)
+                                    1.0 / config['env']['LLC-frequency'])
 
                         if len(control_action) == 7 and len(action) == 4:
                             control_action[0:4] = action

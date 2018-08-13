@@ -4,8 +4,10 @@ import numpy as np
 import pybullet as p
 import pybullet_data
 
+from softqlearning.misc import Serializable
 
-class InvertedPendulumEnv(Env):
+
+class InvertedPendulumEnv(Env, Serializable):
     """Inverted pendulum gym environment using pybullet"""
 
     metadata = {'render_modes': ['human']}

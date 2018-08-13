@@ -32,8 +32,8 @@ class ReplayBuffer(object):
         self.seed = seed
         if seed:
             random.seed(seed)
-        self.size = size
-        self.contents = deque(maxlen=size)
+        self.size = int(size)
+        self.contents = deque(maxlen=self.size)
         self._Experience = namedtuple(
             "Experience",
             ["observation", "action", "reward", "next_observation", "done"])

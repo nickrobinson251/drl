@@ -1,0 +1,48 @@
+\newcommand{\etalchar}[1]{$^{#1}$}
+\begin{thebibliography}{BXCVdP18}
+
+\bibitem[BXCVdP18]{berseth2018progressive}
+Glen Berseth, Cheng Xie, Paul Cernek, and Michiel Van~de Panne.
+\newblock Progressive reinforcement learning with distillation for
+  multi-skilled motion control.
+\newblock {\em arXiv preprint arXiv:1802.04765}, 2018.
+
+\bibitem[HTAL17]{haarnoja2017reinforcement}
+Tuomas Haarnoja, Haoran Tang, Pieter Abbeel, and Sergey Levine.
+\newblock Reinforcement learning with deep energy-based policies.
+\newblock {\em arXiv preprint arXiv:1702.08165}, 2017.
+
+\bibitem[MBM{\etalchar{+}}16]{mnih2016asynchronous}
+Volodymyr Mnih, Adria~Puigdomenech Badia, Mehdi Mirza, Alex Graves, Timothy
+  Lillicrap, Tim Harley, David Silver, and Koray Kavukcuoglu.
+\newblock Asynchronous methods for deep reinforcement learning.
+\newblock In {\em International conference on machine learning}, pages
+  1928--1937, 2016.
+
+\bibitem[NNXS17]{nachum2017bridging}
+Ofir Nachum, Mohammad Norouzi, Kelvin Xu, and Dale Schuurmans.
+\newblock Bridging the gap between value and policy based reinforcement
+  learning.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  2772--2782, 2017.
+
+\bibitem[OMKM16]{o2016combining}
+Brendan O'Donoghue, Remi Munos, Koray Kavukcuoglu, and Volodymyr Mnih.
+\newblock Combining policy gradient and q-learning.
+\newblock {\em arXiv preprint arXiv:1611.01626}, 2016.
+
+\bibitem[TBC{\etalchar{+}}17]{teh2017distral}
+Yee Teh, Victor Bapst, Wojciech~M Czarnecki, John Quan, James Kirkpatrick, Raia
+  Hadsell, Nicolas Heess, and Razvan Pascanu.
+\newblock Distral: Robust multitask reinforcement learning.
+\newblock In {\em Advances in Neural Information Processing Systems}, pages
+  4499--4509, 2017.
+
+\bibitem[YKL17]{yang2017emergence}
+Chuanyu Yang, Taku Komura, and Zhibin Li.
+\newblock Emergence of human-comparable balancing behaviours by deep
+  reinforcement learning.
+\newblock In {\em Humanoid Robotics (Humanoids), 2017 IEEE-RAS 17th
+  International Conference on}, pages 372--377. IEEE, 2017.
+
+\end{thebibliography}

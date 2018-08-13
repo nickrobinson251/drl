@@ -9,8 +9,10 @@ import pybullet as p
 import pybullet_data
 import os
 
+from softqlearning.misc import Serializable
 
-class BalancebotEnv(Env):
+
+class BalancebotEnv(Env, Serializable):
     """Balancebot gym environment"""
 
     metadata = {'render_modes': ['human']}

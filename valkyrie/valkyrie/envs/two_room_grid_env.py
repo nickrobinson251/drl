@@ -4,8 +4,11 @@ import copy
 import matplotlib.pyplot as plt
 import numpy as np
 
-from gym import spaces
+from gym import Env, spaces
 from gym.utils import seeding
+
+from softqlearning.misc import Serializable
+
 
 EMPTY = BLACK = 0
 WALL = GRAY = 1
@@ -27,7 +30,7 @@ LEFT = 3
 RIGHT = 4
 
 
-class TwoRoomGridEnv():
+class TwoRoomGridEnv(Env, Serializable):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
     def __init__(self, target_room="any"):

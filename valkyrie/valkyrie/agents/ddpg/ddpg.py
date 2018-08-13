@@ -1,11 +1,11 @@
 import tensorflow as tf
 import numpy as np
-from ou_noise import OUNoise
 
 from actor_network import ActorNetwork
 from critic_network import CriticNetwork
 from grad_inverter import grad_inverter
 from normalize2 import BatchNormalize, OnlineNormalize
+from ou_noise import OUNoise
 from prioritized_replay import Memory
 from replay_buffer import ReplayBuffer
 from utils import translate
