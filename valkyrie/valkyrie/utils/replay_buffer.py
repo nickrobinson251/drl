@@ -4,6 +4,11 @@ import pickle
 import random
 
 
+Experience = namedtuple(
+    "Experience",
+    ["observation", "action", "reward", "next_observation", "done"])
+
+
 class ReplayBuffer(object):
     """A replay buffer which stores experiences and can return random samples.
 
@@ -34,9 +39,6 @@ class ReplayBuffer(object):
             random.seed(seed)
         self.size = int(size)
         self.contents = deque(maxlen=self.size)
-        self._Experience = namedtuple(
-            "Experience",
-            ["observation", "action", "reward", "next_observation", "done"])
 
     def add_sample(self, observation, action, reward, next_observation, done):
         """Add an experience to the replay buffer.
@@ -50,7 +52,7 @@ class ReplayBuffer(object):
         done : bool
         """
         self.contents.append(
-            self._Experience(
+            Experience(
                 observation=observation,
                 action=action,
                 reward=reward,
