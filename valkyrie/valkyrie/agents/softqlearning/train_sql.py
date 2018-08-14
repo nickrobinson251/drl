@@ -8,10 +8,12 @@ from softqlearning.value_functions import NNQFunction
 from softqlearning.misc.plotter import QFPolicyPlotter
 from softqlearning.policies import StochasticNNPolicy
 from softqlearning.misc.sampler import SkipSampler
+from softqlearning.misc.logger import set_snapshot_dir
 
 from valkyrie.utils import ReplayBuffer
 from valkyrie.envs import ValkyrieBalanceEnv, BalancebotEnv, TwoRoomGridEnv
 
+set_snapshot_dir(".")
 
 parser = argparse.ArgumentParser(description="Choose env to train.")
 parser.add_argument("--env", default="valkyrie",
@@ -39,10 +41,13 @@ def test():
         #         "torsoRoll",
         #     ],
         #     render=False)
+
         # sagittal
         env = ValkyrieBalanceEnv(
             balance_task='3d',
-            render=args.render)
+            render=args.render,
+            logfilename="."
+            )
     elif args.env == "balancebot":
         env = BalancebotEnv()
     elif args.env == "gridworld":
@@ -96,7 +101,7 @@ def test():
         reward_scale=0.1,
         save_full_state=True,
         td_target_update_interval=1000,
-        value_n_particles=16)
+        value_n_particles=32)
 
     env.reset()
     env.start_logging_video()
