@@ -16,8 +16,12 @@ from valkyrie.envs import ValkyrieBalanceEnv, BalancebotEnv, TwoRoomGridEnv
 parser = argparse.ArgumentParser(description="Choose env to train.")
 parser.add_argument("--env", default="valkyrie",
                     help="valkyrie, balancebot or gridworld.")
+parser.add_argument("--epochs", default=10,
+                    help="number of training epochs.")
 parser.add_argument("--plot", action="store_true",
                     help="Enable plotting of Q function during training.")
+parser.add_argument("--render", action="store_true",
+                    help="Enable video during training.")
 args = parser.parse_args()
 
 
@@ -38,7 +42,7 @@ def test():
         # sagittal
         env = ValkyrieBalanceEnv(
             balance_task='3d',
-            render=False)
+            render=args.render)
     elif args.env == "balancebot":
         env = BalancebotEnv()
     elif args.env == "gridworld":
@@ -79,13 +83,13 @@ def test():
         policy=policy,
         plotter=plotter,
         discount=1.0,
-        epoch_length=1,
-        eval_n_episodes=1,
+        epoch_length=100,
+        eval_n_episodes=10,
         eval_render=True,
         kernel_fn=adaptive_isotropic_gaussian_kernel,
         kernel_n_particles=32,
         kernel_update_ratio=0.5,
-        n_epochs=1,
+        n_epochs=int(args.epochs),
         n_train_repeat=1,
         policy_lr=3e-4,
         q_function_lr=3e-4,
