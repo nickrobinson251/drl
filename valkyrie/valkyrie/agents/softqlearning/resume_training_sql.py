@@ -2,7 +2,7 @@
 import argparse
 import joblib
 import numpy as np
-import tensorflow as tf
+# import tensorflow as tf
 
 from softqlearning.algorithms import SQL
 from softqlearning.misc.kernel import adaptive_isotropic_gaussian_kernel
@@ -11,6 +11,7 @@ from softqlearning.misc.plotter import QFPolicyPlotter
 from softqlearning.policies import StochasticNNPolicy
 from softqlearning.misc.sampler import SkipSampler
 from softqlearning.misc.logger import set_snapshot_dir
+from softqlearning.misc import tf_utils
 
 from valkyrie.utils import ReplayBuffer
 from valkyrie.envs import ValkyrieBalanceEnv, BalancebotEnv, TwoRoomGridEnv
@@ -83,13 +84,13 @@ def main():
     else:
         plotter = None
 
-    with tf.Session().as_default():
+    with tf_utils.get_default_session().as_default():
         data = joblib.load(args.file)
         if 'algo' in data.keys():
             saved_qf = data['algo'].qf
             saved_policy = data['algo'].policy
         else:
-            saved_qf = data['qf']
+            saved_qf = data['q_function']
             saved_policy = data['policy']
 
         algorithm = SQL(
@@ -101,14 +102,14 @@ def main():
             kernel_fn=adaptive_isotropic_gaussian_kernel,
             kernel_n_particles=16,
             kernel_update_ratio=0.5,
-            n_epochs=args.epochs,
+            n_epochs=int(args.epochs),
             n_train_repeat=1,
             plotter=plotter,
             policy=saved_policy,
             policy_lr=3E-4,
             replay_buffer=replay_buffer,
-            qf=saved_qf,
-            qf_lr=3E-4,
+            q_function=saved_qf,
+            q_function_lr=3E-4,
             reward_scale=30,
             sampler=sampler,
             save_full_state=True,

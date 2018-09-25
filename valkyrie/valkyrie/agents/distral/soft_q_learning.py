@@ -21,36 +21,6 @@ def log_sum_exp(z, factors=1):
     return np.log(np.sum(factors*np.exp(z - z_max)))
 
 
-def distral_objective(
-        policy_0,
-        task_policies,
-        envs,
-        time_steps,
-        alpha=0.5,
-        beta=1e3,
-        gamma=1):
-    """
-
-    See equation (1) in Distral paper.
-    """
-    reward_term = []
-    shaping_term = []
-    entropy_term = []
-    for i, policy_i in enumerate(task_policies):
-        state = envs[i].observation
-        for t in range(time_steps):
-            action = policy_i(state)
-            state, reward, done, _ = envs[i].step(action)
-            gamma *= gamma
-            reward_term.append(gamma * reward)
-            shaping_term.append(
-                gamma * alpha/beta * np.log(policy_0(action, state)))
-            entropy_term.append(gamma / beta * np.log(policy_i(action, state)))
-            state, reward, done, _ = envs[i].step(action)
-    objectiv = np.sum(reward_term) + np.sum(shaping_term) - np.sum(entropy_term)
-    return objectiv
-
-
 def soft_V(state, policy, env, beta=1e3):
     """
 
@@ -79,14 +49,3 @@ def soft_advantage_function(action, state, policy, env, beta=1e3):
     Q = soft_Q(action, state, env)
     V = soft_V(state, policy, env, beta=beta)
     return Q - V
-
-
-def reward_regularised(action, state, env, policy_0, policy_i, alpha, beta):
-    """Reward function regualised by shapng and entropy terms.
-
-    See equation (9) in Distral paper.
-    """
-    reward = env.reward(action, state)
-    reg_shaping = alpha / beta * np.log(policy_0(action, state))
-    reg_entropy = 1.0 / beta * np.log(policy_i(action, state))
-    return reward + reg_shaping - reg_entropy

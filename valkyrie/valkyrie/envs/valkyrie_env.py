@@ -1459,18 +1459,46 @@ class ValkyrieBalanceEnv(ValkyrieEnvBase):
         xy_vel_reward = np.exp(-0.57 * (xy_vel_err) ** 2)
 
         torso_pitch_reward = np.exp(-4.68 * (torso_pitch_err) ** 2)
-        torso_roll_reward = np.exp(-4.68 * (torso_roll_err) ** 2)
         pelvis_pitch_reward = np.exp(-4.68 * (pelvis_pitch_err) ** 2)
-        pelvis_roll_reward = np.exp(-4.68 * (pelvis_roll_err) ** 2)
 
         right_foot_force_reward = np.exp(-2e-5 * (right_foot_force_err) ** 2)
-        right_foot_roll_reward = np.exp(-4.68 * (right_foot_roll_err) ** 2)
         left_foot_force_reward = np.exp(-2e-5 * (left_foot_force_err) ** 2)
+
+        right_foot_roll_reward = np.exp(-4.68 * (right_foot_roll_err) ** 2)
         left_foot_roll_reward = np.exp(-4.68 * (left_foot_roll_err) ** 2)
+        torso_roll_reward = np.exp(-4.68 * (torso_roll_err) ** 2)
+        pelvis_roll_reward = np.exp(-4.68 * (pelvis_roll_err) ** 2)
+
+        if self.balance_task == "lateral":
+            torso_pitch_reward = 0
+            pelvis_pitch_reward = 0
+            x_pos_reward = 0
+            x_vel_reward = 0
+            xy_pos_reward = 0
+            xy_vel_reward = 0
+        elif self.balance_task == "sagittal":
+            torso_roll_reward = 0
+            pelvis_roll_reward = 0
+            y_pos_reward = 0
+            y_vel_reward = 0
+            xy_pos_reward = 0
+            xy_vel_reward = 0
+        elif self.balance_task == "3d":
+            x_pos_reward = 0
+            x_vel_reward = 0
+            y_pos_reward = 0
+            y_vel_reward = 0
+        else:
+            raise ValueError(
+                "balance_task must be 'lateral', 'sagittal' or '3d'")
 
         reward_terms = ((2.0, xy_pos_reward),
+                        (2.0, x_pos_reward),
+                        (2.0, y_pos_reward),
                         (3.0, z_pos_reward),
                         (2.0, xy_vel_reward),
+                        (2.0, x_vel_reward),
+                        (2.0, y_vel_reward),
                         (1.0, z_vel_reward),
                         (1.0, torso_pitch_reward),
                         (1.0, torso_roll_reward),
@@ -1478,8 +1506,8 @@ class ValkyrieBalanceEnv(ValkyrieEnvBase):
                         (1.0, pelvis_roll_reward),
                         (1.0, right_foot_force_reward),
                         (1.0, left_foot_force_reward),
-                        # (1.0, right_foot_roll_reward),
-                        # (1.0, left_foot_roll_reward)
+                        (1.0, right_foot_roll_reward),
+                        (1.0, left_foot_roll_reward)
                         )
         reward = (np.sum(np.product(reward_terms, axis=1))
                   / np.sum(reward_terms[0])) * 10
@@ -1495,29 +1523,28 @@ class ValkyrieBalanceEnv(ValkyrieEnvBase):
         reward += fall_term + foot_contact_term
 
         reward_term = {
-            "x_pos_reward": x_pos_reward,
-            "y_pos_reward": y_pos_reward,
-            "z_pos_reward": z_pos_reward,
-            "x_vel_reward": x_vel_reward,
-            "y_vel_reward": y_vel_reward,
-            "z_vel_reward": z_vel_reward,
-            "torso_pitch_reward": torso_pitch_reward,
+            "fall_term": fall_term,
+            "foot_contact_term": foot_contact_term,
+            "left_foot_force_reward": left_foot_force_reward,
+            "left_foot_roll_reward": left_foot_roll_reward,
             "pelvis_pitch_reward": pelvis_pitch_reward,
-            "torso_roll_reward": torso_roll_reward,
             "pelvis_roll_reward": pelvis_roll_reward,
+            "right_foot_force_reward": right_foot_force_reward,
+            "right_foot_roll_reward": right_foot_roll_reward,
+            "torso_pitch_reward": torso_pitch_reward,
+            "torso_roll_reward": torso_roll_reward,
+            "x_pos_reward": x_pos_reward,
+            "x_vel_reward": x_vel_reward,
             "xy_pos_reward": xy_pos_reward,
             "xy_vel_reward": xy_vel_reward,
-            "left_foot_force_reward": left_foot_force_reward,
-            "right_foot_force_reward": right_foot_force_reward,
-            "left_foot_roll_reward": left_foot_roll_reward,
-            "right_foot_roll_reward": right_foot_roll_reward,
-            "foot_contact_term": foot_contact_term,
-            "fall_term": fall_term
+            "y_pos_reward": y_pos_reward,
+            "y_vel_reward": y_vel_reward,
+            "z_pos_reward": z_pos_reward,
+            "z_vel_reward": z_vel_reward,
         }
 
         if penalise:
-            # penalize reward when target position hard to achieve: position -
-            # actn
+            # penalize when target position hard to achieve: position - actn
             position_follow_penalty = 0
             for joint in self.controlled_joints:  # TODO
                 joint_state = self._p.getJointState(
@@ -1539,8 +1566,7 @@ class ValkyrieBalanceEnv(ValkyrieEnvBase):
                     self.robot_id, self.joint_idx[joint])
                 torque_penalty -= abs(joint_state[3] / self.u_max[joint])
 
-            # penalize power rate of joint motor: vel/max_vel *
-            # torque/max_torque
+            # penalize power rate of joint motor vel/max_vel * torque/max_torque
             power_penalty = 0
             for joint in self.controlled_joints:  # TODO
                 joint_state = self._p.getJointState(

@@ -2,20 +2,20 @@ import gym
 import time
 from numpy import zeros
 from pprint import pprint
-from valkyrie.envs.valkyrie_env import ValkyrieEnvBasic
+from valkyrie.envs.valkyrie_env import ValkyrieBalanceEnv
 
 
 def test_imported_env():
-    env = ValkyrieEnvBasic(render=False)
-    time.sleep(3)
+    env = ValkyrieBalanceEnv(render=True)
+    time.sleep(10)
 
     env._setup_camera(yaw=90, target_position=[0.5, 0, 0.9])
     env.step(zeros(env.action_space.n))
-    time.sleep(3)
+    time.sleep(10)
 
     env._setup_camera(yaw=0, target_position=[0, 0, 0.9])
     env.step(zeros(env.action_space.n))
-    time.sleep(3)
+    time.sleep(10)
 
     # pprint(env.get_reading())
     print("[PASSED] {} works!".format(env.__class__))

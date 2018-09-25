@@ -13,18 +13,20 @@ from softqlearning.misc.logger import set_snapshot_dir
 from valkyrie.utils import ReplayBuffer
 from valkyrie.envs import ValkyrieBalanceEnv, BalancebotEnv, TwoRoomGridEnv
 
-set_snapshot_dir(".")
 
 parser = argparse.ArgumentParser(description="Choose env to train.")
 parser.add_argument("--env", default="valkyrie",
                     help="valkyrie, balancebot or gridworld.")
-parser.add_argument("--epochs", default=10,
+parser.add_argument("--epochs", default=100,
                     help="number of training epochs.")
+parser.add_argument("--dir", default="./trial_latest")
 parser.add_argument("--plot", action="store_true",
                     help="Enable plotting of Q function during training.")
 parser.add_argument("--render", action="store_true",
                     help="Enable video during training.")
 args = parser.parse_args()
+
+set_snapshot_dir(args.dir)
 
 
 def test():
@@ -88,7 +90,7 @@ def test():
         policy=policy,
         plotter=plotter,
         discount=1.0,
-        epoch_length=100,
+        epoch_length=1000,
         eval_n_episodes=10,
         eval_render=True,
         kernel_fn=adaptive_isotropic_gaussian_kernel,

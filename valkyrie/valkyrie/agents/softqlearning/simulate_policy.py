@@ -17,24 +17,24 @@ def cli():
 
 
 def simulate_policy(args):
-    with tf.Session() as sess:
-        data = joblib.load(args.file)
-        if 'algo' in data.keys():
-            policy = data['algo'].policy
-            env = data['algo'].env
-        else:
-            policy = data['policy']
-            env = data['env']
+    sess = tf.InteractiveSession()
+    data = joblib.load(args.file)
+    if 'algo' in data.keys():
+        policy = data['algo'].policy
+        env = data['algo'].env
+    else:
+        policy = data['policy']
+        env = data['env']
 
-        # sess.run(tf.global_variables_initializer())
-        print(sess.run(tf.report_uninitialized_variables()))
-        while True:
-            rollout(
-                env=env,
-                agent=policy,
-                max_path_length=args.length,
-                animated=True,
-                speedup=args.speedup)
+    # sess.run(tf.global_variables_initializer())
+    print(sess.run(tf.report_uninitialized_variables()))
+    # while True:
+    #     rollout(
+    #         env=env,
+    #         agent=policy,
+    #         max_path_length=args.length,
+    #         animated=True,
+    #         speedup=args.speedup)
 
 
 def main():
